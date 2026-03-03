@@ -1,0 +1,10 @@
+# core libraries for retrieval and generation
+transformers>=4.0.0
+sentence-transformers>=2.0.0
+faiss-cpu>=1.7.0  # or faiss-gpu if you have CUDA
+accelerate>=0.15.0
+
+# optional utilities
+tqdm
+python-dotenv
+pytest
