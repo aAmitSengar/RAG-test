@@ -9,7 +9,7 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # Load token from .env
 load_dotenv()
-token = os.getenv("HF_TOKEN")
+token = os.getenv("HF_TOKEN") or None  # None means unauthenticated (public models only)
 
 def download_local_model(repo_id, local_dir):
     print(f"Downloading {repo_id} to {local_dir}...")
@@ -23,18 +23,26 @@ def download_local_model(repo_id, local_dir):
         print(f"Successfully downloaded {repo_id}")
     except Exception as e:
         print(f"Error downloading {repo_id}: {e}")
+        if "401" in str(e) or "403" in str(e) or "token" in str(e).lower():
+            print(
+                "\nAuthentication error. If this model is private or gated, "
+                "set a valid HF_TOKEN in your .env file.\n"
+                "Get your token at: https://huggingface.co/settings/tokens"
+            )
 
 if __name__ == "__main__":
     base_path = Path(__file__).parent.parent
-    
+    models_dir = base_path / "models"
+    models_dir.mkdir(exist_ok=True)
+
     # Download embedding model
     download_local_model(
         repo_id="sentence-transformers/all-MiniLM-L6-v2",
-        local_dir=str(base_path / "all-MiniLM-L6-v2")
+        local_dir=str(models_dir / "all-MiniLM-L6-v2")
     )
-    
+
     # Download generation model
     download_local_model(
-        repo_id="t5-small",
-        local_dir=str(base_path / "t5-small")
+        repo_id="google-t5/t5-small",
+        local_dir=str(models_dir / "t5-small")
     )
