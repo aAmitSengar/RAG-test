@@ -1,503 +1,395 @@
-# RAG System - Detailed Flow Diagram & Architecture
+# RAG Flow Diagram and Concepts
 
-## PHASE 1: SYSTEM INITIALIZATION
+This document explains the full flow of your current project and how each part works together.
 
-### Step 1: Config Initialization
-**File:** `src/rag/config.py` → `Config.__init__()`
+## 1) What is RAG?
 
-```
-Config.__init__()
-│
-├── Resolve project directories
-│   └── Path(__file__).parent.parent.parent
-│       └── Result: project_root = /Users/amit.kumar2/practice/RAG/RAG-test
-│
-├── Create required directories
-│   ├── self.data_dir.mkdir(exist_ok=True)           → data/
-│   └── self.models_dir.mkdir(exist_ok=True)         → models/
-│
-├── Define file paths
-│   ├── self.docs_file = data/docs.txt
-│   └── self.index_file = data/faiss.index
-│
-├── Resolve model paths (Priority: env > local > HuggingFace)
-│   ├── _resolve_model_path() [Embedding Model]
-│   │   ├── Check: env var "EMB_MODEL"
-│   │   ├── Check: models/all-MiniLM-L6-v2/ exists locally
-│   │   └── Fallback: "all-MiniLM-L6-v2" (HuggingFace ID)
-│   │       └── Result: self.emb_model = "all-MiniLM-L6-v2"
-│   │
-│   ├── _resolve_model_path() [Generation Model]
-│   │   ├── Check: env var "GEN_MODEL"
-│   │   ├── Check: models/t5-small/ exists locally
-│   │   └── Fallback: "t5-small" (HuggingFace ID)
-│   │       └── Result: self.gen_model = "t5-small"
-│   │
-│   ├── @property emb_model_is_local
-│   │   └── Returns: bool (is model stored locally?)
-│   │
-│   └── @property gen_model_is_local
-│       └── Returns: bool (is model stored locally?)
-│
-├── Setup SSL certificates [macOS specific]
-│   └── _setup_ssl_certificates()
-│       ├── Check: sys.platform == "darwin"
-│       ├── Set: REQUESTS_CA_BUNDLE environment variable
-│       └── Set: SSL_CERT_FILE environment variable
-│
-├── Load runtime configuration
-│   ├── self.retrieval_k = int(os.getenv("RETRIEVAL_K", "3"))
-│   └── self.use_local_only = os.getenv("USE_LOCAL_ONLY", "false")
-│
-└── Log configuration
-    └── logger.info("✓ Configuration ready")
+RAG (Retrieval-Augmented Generation) combines:
+
+1. `Retriever`: finds relevant context from your document store.
+2. `Generator`: writes an answer using that retrieved context.
+
+Goal: better factual answers than generation-only models.
+
+---
+
+## 2) High-Level Pipeline
+
+```mermaid
+flowchart TD
+    A[User Question] --> B[RAGPipeline.run]
+    B --> C[Retriever.retrieve]
+    C --> D[Top-k Ranked Chunks + Scores]
+    D --> E[Generator.generate_with_fallback]
+    E --> F[Answer + Citations]
+    F --> G[Console Output]
 ```
 
 ---
 
-### Step 2: Retriever Initialization
-**File:** `src/rag/retriever.py` → `Retriever.__init__()`
+## 3) End-to-End Data Lifecycle
 
-```
-Retriever.__init__(config)
-│
-├── Store config reference
-│   └── self.config = config
-│
-├── Load Documents from file
-│   ├── with open(config.docs_file, "r") as f:
-│   ├── self.documents = f.read().split("\n---\n")
-│   │   └── Result: ["Doc 1 content", "Doc 2 content", "Doc 3 content"]
-│   │
-│   └── logger.info(f"Loaded {len(documents)} documents")
-│
-├── Load Embedding Model (SentenceTransformer)
-│   ├── if config.emb_model_is_local:
-│   │   └── model = SentenceTransformer(config.emb_model)
-│   │       └── Load from: models/all-MiniLM-L6-v2/
-│   │
-│   └── else:
-│       └── model = SentenceTransformer("all-MiniLM-L6-v2")
-│           ├── Download from HuggingFace Hub (first time only)
-│           └── Cache location: ~/.cache/huggingface/
-│
-├── Create or Load FAISS Index
-│   ├── if config.index_file.exists():
-│   │   ├── self.index = faiss.read_index(str(config.index_file))
-│   │   └── logger.info("Loaded existing FAISS index")
-│   │
-│   └── else:
-│       ├── Encode all documents
-│       │   └── embeddings = model.encode(documents)
-│       │       ├── Shape: (num_docs, 384)
-│       │       └── Example: [[0.123, -0.456, ...], [0.789, ...], ...]
-│       │
-│       ├── Initialize FAISS IndexFlatL2
-│       │   └── self.index = faiss.IndexFlatL2(384)
-│       │       └── Dimension = 384 (embedding vector size)
-│       │
-│       ├── Add embeddings to index
-│       │   └── self.index.add(embeddings)
-│       │
-│       ├── Save index to disk
-│       │   └── faiss.write_index(self.index, str(config.index_file))
-│       │       └── File size: ~10MB (for 100 docs)
-│       │
-│       └── logger.info("Created & saved FAISS index")
-│
-└── Store for later use
-    ├── self.model = embedding_model
-    └── self.embedding_dim = 384
+```mermaid
+flowchart LR
+    D1[data/docs.txt] --> I1[Chunking]
+    I1 --> I2[Embeddings]
+    I2 --> I3[FAISS Index: data/faiss.index]
+    I1 --> I4[Metadata: data/faiss_meta.json]
+    Q1[User Query] --> R1[Query Embedding]
+    R1 --> R2[FAISS Search]
+    I3 --> R2
+    I4 --> R3[ID -> Chunk Resolution]
+    R2 --> R3
+    R3 --> R4[Score Filter + Dedupe + Context Budget]
+    R4 --> G1[Prompt Construction]
+    G1 --> G2[Seq2Seq Generation]
+    G2 --> O1[Final Answer]
 ```
 
 ---
 
-### Step 3: Generator Initialization
-**File:** `src/rag/generator.py` → `Generator.__init__()`
+## 4) Module Responsibilities
 
+### `src/rag/config.py`
+- Centralizes file paths and runtime knobs.
+- Important knobs:
+  - `RETRIEVAL_K`
+  - `FETCH_K`
+  - `MIN_RELEVANCE_SCORE`
+  - `MAX_CONTEXT_CHARS`
+  - `CHUNK_SIZE_CHARS`
+  - `CHUNK_OVERLAP_CHARS`
+  - `CITATIONS_ENABLED`
+  - `STEP_BY_STEP_MODE`
+  - `DO_SAMPLE`
+
+### `src/rag/retriever.py`
+- Builds index:
+  1. Read `docs.txt`
+  2. Chunk text (with overlap)
+  3. Embed chunks
+  4. Save `faiss.index`
+  5. Save `faiss_meta.json`
+- Query retrieval:
+  1. Encode user query
+  2. Search FAISS (`fetch_k` candidates)
+  3. Convert distances -> normalized relevance scores
+  4. Filter by threshold
+  5. Dedupe similar text
+  6. Respect context budget
+  7. Return structured chunks:
+     - `chunk_id`, `source_doc_id`, `text`, `score`, `distance`
+
+### `src/rag/generator.py`
+- Creates grounded prompt from retrieved chunks.
+- Attempts model generation.
+- If output is weak or model fails:
+  - switches to extractive fallback.
+- Returns:
+  - `answer`
+  - `citations` (chunk IDs found in output or added by pipeline fallback).
+
+### `src/main.py`
+- CLI entrypoint and orchestration:
+  1. Init config + retriever + generator
+  2. Validate setup
+  3. Build index if needed
+  4. Interactive loop
+- Output behavior:
+  - default: prompt + answer only
+  - `--debug`: full retrieval/generation logs
+
+---
+
+## 5) Query-Time Flow (Current Behavior)
+
+1. User enters question.
+2. Retriever returns top relevant chunks.
+3. Generator tries model answer.
+4. If model output is low quality, fallback produces cleaner extractive answer.
+5. Console shows final answer (and full details only in debug mode).
+
+---
+
+## 6) Why This Design Works for Teaching
+
+- Clear separation of concerns (`Config`, `Retriever`, `Generator`, `Pipeline`).
+- Easy to inspect each stage independently.
+- Retrieval quality improvements are visible:
+  - chunking, filtering, ranking, context budget.
+- Robust behavior even when generation model is weak/unavailable.
+
+---
+
+## 7) Run Modes
+
+### Normal mode (minimal console)
+```bash
+python3 src/main.py
 ```
-Generator.__init__(config)
-│
-├── Store config reference
-│   └── self.config = config
-│
-├── Load T5 Tokenizer
-│   ├── if config.gen_model_is_local:
-│   │   └── tokenizer = T5Tokenizer.from_pretrained(config.gen_model)
-│   │       └── Load from: models/t5-small/
-│   │
-│   └── else:
-│       └── tokenizer = T5Tokenizer.from_pretrained("t5-small")
-│           ├── Download from HuggingFace (first time only)
-│           └── Cache: ~/.cache/huggingface/
-│
-├── Load T5 Model (PyTorch - Seq2Seq)
-│   ├── if config.gen_model_is_local:
-│   │   └── model = T5ForConditionalGeneration.from_pretrained(config.gen_model)
-│   │       └── Load from: models/t5-small/
-│   │
-│   └── else:
-│       └── model = T5ForConditionalGeneration.from_pretrained("t5-small")
-│           ├── Download seq2seq model (~250MB)
-│           └── Cache: ~/.cache/huggingface/
-│
-├── Detect and set device
-│   ├── if torch.cuda.is_available():
-│   │   └── self.device = "cuda"  (GPU - faster)
-│   │
-│   └── else:
-│       └── self.device = "cpu"   (CPU - slower)
-│
-├── Move model to device
-│   └── model.to(self.device)
-│       └── Load model weights onto GPU/CPU
-│
-├── Set evaluation mode
-│   └── model.eval()
-│       ├── Disable dropout layers
-│       └── Set batch normalization to inference mode
-│
-└── Store for later use
-    ├── self.model = t5_model
-    ├── self.tokenizer = t5_tokenizer
-    └── logger.info("✓ Generator Ready")
+
+### Debug mode (detailed logs)
+```bash
+python3 src/main.py --debug
+```
+
+### Step-by-step teaching mode
+```bash
+STEP_BY_STEP_MODE=true python3 src/main.py --debug
 ```
 
 ---
 
-## PHASE 2: MAIN LOOP - USER QUERY PROCESSING
+## 8) Test Flow
 
+Run all tests:
+
+```bash
+pytest -q
 ```
-while True:
-│
-├── INPUT: User provides query
-│   └── user_input = input("\n🔍 Enter your question (or 'quit'): ")
-│       └── Example: "What is machine learning?"
-│
-├── CHECK: Is user quitting?
-│   ├── if user_input.lower() == "quit":
-│   │   └── break (exit loop)
-│   │
-│   └── else: continue to retrieval
-│
-├─────────────────────────────────────────────────────────────────────
-│ RETRIEVAL PHASE: Find relevant documents
-├─────────────────────────────────────────────────────────────────────
-│
-├── context = retriever.retrieve(user_input, k=3)
-│   │   **File:** src/rag/retriever.py → Retriever.retrieve()
-│   │
-│   ├── Step 1: Embed the query
-│   │   └── query_embedding = self.model.encode(user_input)
-│   │       ├── Input: "What is machine learning?"
-│   │       ├── Output shape: (384,)
-│   │       └── Output: [0.123, -0.456, 0.789, ..., 0.234]
-│   │
-│   ├── Step 2: Convert to numpy array
-│   │   └── query_embedding = np.array(embedding).astype('float32')
-│   │       └── Required for FAISS operations
-│   │
-│   ├── Step 3: Search FAISS index
-│   │   └── distances, indices = self.index.search(query_embedding, k=3)
-│   │       ├── distances = [0.5, 1.2, 2.1]   (L2 distance scores)
-│   │       └── indices = [5, 12, 3]          (doc indices)
-│   │
-│   ├── Step 4: Retrieve document content
-│   │   ├── context = ""
-│   │   ├── for idx in indices:
-│   │   │   ├── doc = self.documents[idx]
-│   │   │   └── context += "\n\n" + doc
-│   │   │
-│   │   └── Result: Top-3 documents concatenated
-│   │
-│   └── logger.info(f"Retrieved {len(indices)} documents")
-│
-│   **Context Output Example:**
-│   ```
-│   Machine learning is a subset of artificial intelligence...
-│   
-│   Neural networks consist of interconnected layers...
-│   
-│   Deep learning uses multiple hidden layers...
-│   ```
-│
-├─────────────────────────────────────────────────────────────────────
-│ GENERATION PHASE: Generate answer using T5
-├─────────────────────────────────────────────────────────────────────
-│
-├── answer = generator.generate(user_input, context)
-│   │   **File:** src/rag/generator.py → Generator.generate()
-│   │
-│   ├── Step 1: Create prompt
-│   │   └── prompt = f"Question: {query}\n\nContext:\n{context}\n\nAnswer:"
-│   │
-│   │   **Prompt Output Example:**
-│   │   ```
-│   │   Question: What is machine learning?
-│   │   
-│   │   Context:
-│   │   Machine learning is a subset of AI that enables systems...
-│   │   Neural networks consist of interconnected layers...
-│   │   Deep learning uses multiple hidden layers...
-│   │   
-│   │   Answer:
-│   │   ```
-│   │
-│   ├── Step 2: Tokenize prompt
-│   │   ├── inputs = self.tokenizer(prompt, return_tensors="pt")
-│   │   │
-│   │   ├── Result: Dictionary with:
-│   │   │   ├── input_ids: [[101, 3145, 1029, ...]]  (token indices)
-│   │   │   └── attention_mask: [[1, 1, 1, ..., 1]]
-│   │   │
-│   │   └── Move to device
-│   │       └── inputs = inputs.to(self.device)  (CPU or GPU)
-│   │
-│   ├── Step 3: Generate output tokens
-│   │   ├── with torch.no_grad():
-│   │   │   └── Disable gradient computation (inference only)
-│   │   │
-│   │   ├── outputs = self.model.generate(
-│   │   │       input_ids=input_ids,
-│   │   │       attention_mask=attention_mask,
-│   │   │       max_length=150,
-│   │   │       num_beams=4,
-│   │   │       early_stopping=True
-│   │   │   )
-│   │   │
-│   │   └── **T5 Decoding Process:**
-│   │       ├── Beam Search (4 beams active)
-│   │       │   └── Keep 4 best hypothesis paths simultaneously
-│   │       │
-│   │       ├── Each generation step:
-│   │       │   ├── Model predicts probability of next token
-│   │       │   ├── Select top candidates (beam width = 4)
-│   │       │   └── Expand each hypothesis
-│   │       │
-│   │       ├── Stopping criteria:
-│   │       │   ├── Max length: 150 tokens
-│   │       │   └── Early stop if [EOS] token generated
-│   │       │
-│   │       └── Result: output_ids = [[0, 105, 3142, 1029, ...]]
-│   │
-│   ├── Step 4: Decode tokens to text
-│   │   ├── answer = self.tokenizer.decode(
-│   │   │       output_ids[0],
-│   │   │       skip_special_tokens=True
-│   │   │   )
-│   │   │
-│   │   └── Result: "Machine learning is a technique where systems learn..."
-│   │
-│   └── return answer
-│
-├─────────────────────────────────────────────────────────────────────
-│ OUTPUT PHASE: Display answer
-├─────────────────────────────────────────────────────────────────────
-│
-├── print(f"\n💡 Answer:\n{answer}\n")
-│   └── Display generated answer to user terminal
-│
-└── Loop back to input()
+
+Run only generator behavior tests:
+
+```bash
+pytest -q tests/test_generator_prompt.py
+```
+
+Run one specific regression test:
+
+```bash
+pytest -q tests/test_generator_prompt.py::test_low_quality_model_output_switches_to_fallback
 ```
 
 ---
 
-## PHASE 3: SHUTDOWN
+## 9) Practical Notes
 
-```
-User enters 'quit'
-│
-├── break (exit while True loop)
-│
-├── logger.info("✓ RAG System shutting down")
-│
-└── Program ends
-```
+- If `faiss_meta.json` is missing, the index rebuild path handles it.
+- If model download fails due to SSL, retrieval still works; answer may rely on fallback.
+- Better docs quality (`docs.txt`) directly improves answer quality.
 
 ---
 
-## KEY FILE STRUCTURE & METHODS
+## 10) Deep Concept Notes (Learning Section)
 
-### src/main.py
+This section is intentionally more detailed for learning.
 
-| Component | Purpose |
-|-----------|---------|
-| `main()` | Entry point that initializes all components |
-| `Config()` | Initialize all paths and configuration |
-| `Retriever(config)` | Initialize document retriever |
-| `Generator(config)` | Initialize answer generator |
-| `while True` loop | Main interaction loop for user queries |
-| `retriever.retrieve(query)` | Get relevant documents |
-| `generator.generate(query, context)` | Generate answer from context |
+### A) Why chunking matters
 
----
+If each line in `docs.txt` is very long, retrieval returns broad paragraphs that mix many topics.
+That causes:
+- weaker relevance for specific questions,
+- noisy context for generation.
 
-### src/rag/config.py
+Your chunking strategy solves this by splitting large text into smaller, overlapping pieces.
 
-| Method | Input | Output | Purpose |
-|--------|-------|--------|---------|
-| `__init__()` | None | Config object | Initialize all paths & settings |
-| `_resolve_model_path()` | env_var, local_path, default | str | Find model (env > local > HuggingFace) |
-| `_setup_ssl_certificates()` | None | None | Setup macOS SSL certificates |
-| `@property emb_model_is_local` | None | bool | Check if embedding model is local |
-| `@property gen_model_is_local` | None | bool | Check if generation model is local |
+Example:
+- `CHUNK_SIZE_CHARS=700`
+- `CHUNK_OVERLAP_CHARS=120`
 
----
+Meaning:
+- each chunk is about 700 chars,
+- next chunk repeats ~120 chars from previous chunk,
+- overlap prevents context from being lost at chunk boundaries.
 
-### src/rag/retriever.py
+### B) Why FAISS distance is converted to a score
 
-| Method | Input | Output | Purpose |
-|--------|-------|--------|---------|
-| `__init__(config)` | Config object | Retriever object | Load docs & build FAISS index |
-| `_load_documents()` | None | None | Load docs from file, split by `---` |
-| `_load_embedding_model()` | None | SentenceTransformer | Load `all-MiniLM-L6-v2` |
-| `_initialize_faiss_index()` | None | None | Create/load FAISS index |
-| `retrieve(query, k=3)` | str, int | str | Embed query, search FAISS, return context |
+FAISS returns L2 distance (smaller is better).
+Humans reason better with “higher is better” scores.
+So retrieval converts distance to normalized relevance score in range `[0, 1]`.
 
----
+Then `MIN_RELEVANCE_SCORE` filters weak matches.
 
-### src/rag/generator.py
+### C) Why oversampling (`FETCH_K`) helps
 
-| Method | Input | Output | Purpose |
-|--------|-------|--------|---------|
-| `__init__(config)` | Config object | Generator object | Load T5 tokenizer & model |
-| `_load_tokenizer()` | None | T5Tokenizer | Load `t5-small` tokenizer |
-| `_load_model()` | None | T5ForConditionalGeneration | Load `t5-small` model |
-| `generate(query, context)` | str, str | str | Create prompt → tokenize → generate → decode |
+You may want final `k=3`, but first search top 10 (`FETCH_K=10`) candidates.
+Then filter + dedupe + budget.
 
----
+Without oversampling:
+- strict thresholding can leave too few results.
 
-## DATA FLOW DIAGRAM
+With oversampling:
+- better chance to keep top-quality final chunks.
 
-```
-User Input
-│
-├─→ Retriever.retrieve(query)
-│   ├─→ Embed query using SentenceTransformer
-│   ├─→ Search FAISS index for top-k similar docs
-│   └─→ Return concatenated context
-│
-├─→ Generator.generate(query, context)
-│   ├─→ Create prompt: "Question: {query}\nContext: {context}\nAnswer:"
-│   ├─→ Tokenize prompt to token IDs
-│   ├─→ Run T5 model with beam search (4 beams)
-│   └─→ Decode tokens back to text
-│
-└─→ Print Answer to User Terminal
-```
+### D) Why context budget exists
+
+Even if many chunks are relevant, sending too much text to generator can:
+- dilute focus,
+- increase truncation risk,
+- hurt small-model output quality.
+
+`MAX_CONTEXT_CHARS` keeps prompt size controlled.
+
+### E) Why fallback is still important
+
+Small local models (like `t5-small`) sometimes:
+- echo prompt instructions,
+- give weak short output.
+
+Your pipeline detects low-quality output and switches to extractive fallback.
+This keeps answers useful even when generation quality is low.
 
 ---
 
-## FILES & DEPENDENCIES
+## 11) Walkthrough with a Real Question
 
-### Input Files
+Question: `what happened in 1947`
 
-| File | Format | Purpose |
-|------|--------|---------|
-| `data/docs.txt` | Text (split by `---\n`) | Source documents for RAG system |
+### Step 1: Retrieval
+- Query is embedded.
+- FAISS returns top candidates.
+- Filters keep best chunks (for example chunks around Indian independence and partition period).
 
-### Output Files
+### Step 2: Generation
+- Prompt is built from question + retrieved chunk text.
+- Generator tries to produce answer.
+- If output is weak, fallback extracts best sentences from retrieved chunks.
 
-| File | Format | Purpose |
-|------|--------|---------|
-| `data/faiss.index` | Binary FAISS format | Pre-computed embedding index |
+### Step 3: Output
+- Final answer shown to user.
+- Source chunk IDs added as references.
 
-### Models
-
-| Model | Type | Size | Purpose |
-|-------|------|------|---------|
-| `all-MiniLM-L6-v2` | SentenceTransformer | ~50MB | Embed documents & user queries |
-| `t5-small` | Seq2Seq (Tokenizer + Model) | ~250MB | Generate answers from context |
-
-### External Libraries
-
-```
-sentence-transformers    → Load sentence embeddings & create vectors
-transformers            → Load T5 tokenizer & seq2seq model
-faiss-cpu               → Vector search & similarity matching
-torch                   → Tensor operations & GPU support
-numpy                   → Array operations for embeddings
-logging                 → Debug & info output logs
-```
+Learning point:
+- If retrieval chunks are good but answer is weak, bottleneck is generator quality.
+- If retrieval chunks are bad, bottleneck is indexing/chunking/content quality.
 
 ---
 
-## EXECUTION FLOW SUMMARY
+## 12) Quality Tuning Guide (What to change first)
 
-```
-START: main.py
-│
-├─→ Config.__init__()
-│   └─→ Loads paths, resolves models, setup SSL
-│
-├─→ Retriever(config)
-│   └─→ Loads docs, creates embeddings, builds FAISS
-│
-├─→ Generator(config)
-│   └─→ Loads T5 tokenizer & model
-│
-├─→ ✓ READY FOR QUERIES
-│
-├─→ [MAIN LOOP] while True:
-│   │
-│   ├─→ input() ← Get user query
-│   │
-│   ├─→ retriever.retrieve(query)
-│   │   ├─→ Embed query (384D vector)
-│   │   ├─→ Search FAISS (L2 distance)
-│   │   └─→ Retrieve top-3 documents
-│   │
-│   ├─→ generator.generate(query, context)
-│   │   ├─→ Create prompt
-│   │   ├─→ Tokenize
-│   │   ├─→ T5 generate (beam search, 4 beams)
-│   │   └─→ Decode answer
-│   │
-│   ├─→ print(answer)
-│   │
-│   └─→ Loop if not 'quit', else break
-│
-└─→ [SHUTDOWN]
-```
+When answers are not good, tune in this order:
+
+1. Improve `docs.txt` quality
+2. Rebuild index
+3. Tune retrieval knobs
+4. Tune generation knobs
+
+### A) Improve data first
+- Keep facts clear and atomic.
+- Avoid very long mixed-topic lines.
+- Prefer one idea per sentence, one topic per line (before chunking).
+
+### B) Retrieval tuning
+- Increase `FETCH_K` from `10` -> `15` (if recall is low).
+- Lower `MIN_RELEVANCE_SCORE` from `0.35` -> `0.25` (if too many empty retrievals).
+- Increase `CHUNK_SIZE_CHARS` if chunks are too fragmented.
+
+### C) Generation tuning
+- Keep `DO_SAMPLE=false` for deterministic outputs.
+- If output too short, increase `max_new_tokens`.
+- If repetitive, keep/increase `no_repeat_ngram_size`.
 
 ---
 
-## EXAMPLE RUN TRACE
+## 13) Debugging Checklist by Stage
 
-```
-User: "What is machine learning?"
-│
-├─→ retriever.retrieve()
-│   ├─→ Embed query
-│   │   └─→ [0.123, -0.456, ..., 0.234]  (384D vector)
-│   │
-│   ├─→ FAISS search
-│   │   ├─→ distances: [0.5, 1.2, 2.1]
-│   │   └─→ indices: [5, 12, 3]
-│   │
-│   └─→ Context:
-│       "Machine learning is a subset of AI...
-│        Neural networks consist of...
-│        Deep learning uses multiple..."
-│
-├─→ generator.generate()
-│   ├─→ Create prompt:
-│   │   "Question: What is machine learning?
-│   │    Context: Machine learning is a subset...
-│   │    Answer:"
-│   │
-│   ├─→ Tokenize: [101, 3145, 1029, ..., 102]
-│   │
-│   ├─→ T5 Generate (beam search 4 beams)
-│   │   └─→ [0, 105, 3142, ...]
-│   │
-│   └─→ Decode: "Machine learning is a technique where..."
-│
-└─→ Output:
-    "Machine learning is a technique where systems learn from data..."
-```
+### Stage: Config
+Symptoms:
+- wrong files, wrong models.
+Checks:
+- print `rag.config`
+- verify `docs_file`, `index_file`, `meta_file`, model paths.
+
+### Stage: Index Build
+Symptoms:
+- retrieval poor or irrelevant.
+Checks:
+- rebuild index after changing docs:
+  - delete old index/meta (optional), rerun build.
+- inspect chunk count after indexing.
+
+### Stage: Retrieval
+Symptoms:
+- correct topic not found in chunks.
+Checks:
+- run with `--debug`.
+- inspect top chunk IDs and scores.
+- check if score threshold is too strict.
+
+### Stage: Generation
+Symptoms:
+- generic or instruction-like answer.
+Checks:
+- verify if fallback was triggered.
+- if yes, model output quality is low.
+- rely on fallback or switch to stronger local model.
+
+### Stage: Output
+Symptoms:
+- too noisy console.
+Checks:
+- normal mode: `python3 src/main.py`
+- verbose mode: `python3 src/main.py --debug`
 
 ---
 
-**✅ This markdown file is now properly formatted!**
+## 14) Mini Glossary
 
+- **Embedding**: vector representation of text.
+- **FAISS**: library for fast nearest-neighbor vector search.
+- **Chunk**: small text segment used as retrieval unit.
+- **Top-k**: number of final retrieved items.
+- **Oversampling**: retrieving more candidates than final k before filtering.
+- **Grounding**: forcing answer to rely on retrieved evidence.
+- **Fallback**: backup answer path when generation quality is poor.
+
+---
+
+## 15) Suggested Learning Exercises
+
+1. Change `CHUNK_SIZE_CHARS` and compare retrieved chunks for same query.
+2. Lower `MIN_RELEVANCE_SCORE` and observe retrieval quantity/quality tradeoff.
+3. Ask typo queries (`happned`, `happend`) and inspect retrieval resilience.
+4. Replace one docs line with intentionally wrong fact and observe output behavior.
+5. Run same query in normal mode vs debug mode and map each log line to pipeline stage.
+
+---
+
+## 16) Simple Meaning of A -> G Flow
+
+Flow:
+
+`A[User Question] --> B[RAGPipeline.run] --> C[Retriever.retrieve] --> D[Top-k Ranked Chunks + Scores] --> E[Generator.generate_with_fallback] --> F[Answer + Citations] --> G[Console Output]`
+
+### A) `User Question`
+- What you type in terminal, for example:
+  - `what happened in 1947`
+
+### B) `RAGPipeline.run`
+- Main coordinator function.
+- It controls full query-time process:
+  1. call retriever
+  2. call generator
+  3. return final structured result
+
+### C) `Retriever.retrieve`
+- Converts question into embedding.
+- Searches FAISS index.
+- Pulls candidate chunks from metadata.
+
+### D) `Top-k Ranked Chunks + Scores`
+- Retriever filters and ranks results.
+- Keeps best chunks with fields like:
+  - `chunk_id`
+  - `source_doc_id`
+  - `text`
+  - `score`
+- This is the evidence context passed to generator.
+
+### E) `Generator.generate_with_fallback`
+- Tries to generate natural answer from question + chunks.
+- If generation fails or is low quality:
+  - switches to extractive fallback answer.
+
+### F) `Answer + Citations`
+- Final response object includes:
+  - `answer`
+  - `citations` (chunk IDs)
+- Citations tell which chunks support the answer.
+
+### G) `Console Output`
+- What user sees in terminal.
+- Default mode:
+  - question prompt + final answer only.
+- Debug mode (`--debug`):
+  - full pipeline logs and retrieval details.
