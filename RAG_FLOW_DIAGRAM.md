@@ -5,7 +5,7 @@
 ### Step 1: Config Initialization
 **File:** `src/rag/config.py` → `Config.__init__()`
 
-\```
+```
 Config.__init__()
 │
 ├── Resolve project directories
@@ -51,14 +51,14 @@ Config.__init__()
 │
 └── Log configuration
     └── logger.info("✓ Configuration ready")
-\```
+```
 
 ---
 
 ### Step 2: Retriever Initialization
 **File:** `src/rag/retriever.py` → `Retriever.__init__()`
 
-\```
+```
 Retriever.__init__(config)
 │
 ├── Store config reference
@@ -108,14 +108,14 @@ Retriever.__init__(config)
 └── Store for later use
     ├── self.model = embedding_model
     └── self.embedding_dim = 384
-\```
+```
 
 ---
 
 ### Step 3: Generator Initialization
 **File:** `src/rag/generator.py` → `Generator.__init__()`
 
-\```
+```
 Generator.__init__(config)
 │
 ├── Store config reference
@@ -161,13 +161,13 @@ Generator.__init__(config)
     ├── self.model = t5_model
     ├── self.tokenizer = t5_tokenizer
     └── logger.info("✓ Generator Ready")
-\```
+```
 
 ---
 
 ## PHASE 2: MAIN LOOP - USER QUERY PROCESSING
 
-\```
+```
 while True:
 │
 ├── INPUT: User provides query
@@ -213,13 +213,13 @@ while True:
 │   └── logger.info(f"Retrieved {len(indices)} documents")
 │
 │   **Context Output Example:**
-│   \```
+│   ```
 │   Machine learning is a subset of artificial intelligence...
 │   
 │   Neural networks consist of interconnected layers...
 │   
 │   Deep learning uses multiple hidden layers...
-│   \```
+│   ```
 │
 ├─────────────────────────────────────────────────────────────────────
 │ GENERATION PHASE: Generate answer using T5
@@ -232,7 +232,7 @@ while True:
 │   │   └── prompt = f"Question: {query}\n\nContext:\n{context}\n\nAnswer:"
 │   │
 │   │   **Prompt Output Example:**
-│   │   \```
+│   │   ```
 │   │   Question: What is machine learning?
 │   │   
 │   │   Context:
@@ -241,7 +241,7 @@ while True:
 │   │   Deep learning uses multiple hidden layers...
 │   │   
 │   │   Answer:
-│   │   \```
+│   │   ```
 │   │
 │   ├── Step 2: Tokenize prompt
 │   │   ├── inputs = self.tokenizer(prompt, return_tensors="pt")
@@ -298,13 +298,13 @@ while True:
 │   └── Display generated answer to user terminal
 │
 └── Loop back to input()
-\```
+```
 
 ---
 
 ## PHASE 3: SHUTDOWN
 
-\```
+```
 User enters 'quit'
 │
 ├── break (exit while True loop)
@@ -312,7 +312,7 @@ User enters 'quit'
 ├── logger.info("✓ RAG System shutting down")
 │
 └── Program ends
-\```
+```
 
 ---
 
@@ -322,13 +322,13 @@ User enters 'quit'
 
 | Component | Purpose |
 |-----------|---------|
-| \`main()\` | Entry point that initializes all components |
-| \`Config()\` | Initialize all paths and configuration |
-| \`Retriever(config)\` | Initialize document retriever |
-| \`Generator(config)\` | Initialize answer generator |
-| \`while True\` loop | Main interaction loop for user queries |
-| \`retriever.retrieve(query)\` | Get relevant documents |
-| \`generator.generate(query, context)\` | Generate answer from context |
+| `main()` | Entry point that initializes all components |
+| `Config()` | Initialize all paths and configuration |
+| `Retriever(config)` | Initialize document retriever |
+| `Generator(config)` | Initialize answer generator |
+| `while True` loop | Main interaction loop for user queries |
+| `retriever.retrieve(query)` | Get relevant documents |
+| `generator.generate(query, context)` | Generate answer from context |
 
 ---
 
@@ -336,11 +336,11 @@ User enters 'quit'
 
 | Method | Input | Output | Purpose |
 |--------|-------|--------|---------|
-| \`__init__()\` | None | Config object | Initialize all paths & settings |
-| \`_resolve_model_path()\` | env_var, local_path, default | str | Find model (env > local > HuggingFace) |
-| \`_setup_ssl_certificates()\` | None | None | Setup macOS SSL certificates |
-| \`@property emb_model_is_local\` | None | bool | Check if embedding model is local |
-| \`@property gen_model_is_local\` | None | bool | Check if generation model is local |
+| `__init__()` | None | Config object | Initialize all paths & settings |
+| `_resolve_model_path()` | env_var, local_path, default | str | Find model (env > local > HuggingFace) |
+| `_setup_ssl_certificates()` | None | None | Setup macOS SSL certificates |
+| `@property emb_model_is_local` | None | bool | Check if embedding model is local |
+| `@property gen_model_is_local` | None | bool | Check if generation model is local |
 
 ---
 
@@ -348,11 +348,11 @@ User enters 'quit'
 
 | Method | Input | Output | Purpose |
 |--------|-------|--------|---------|
-| \`__init__(config)\` | Config object | Retriever object | Load docs & build FAISS index |
-| \`_load_documents()\` | None | None | Load docs from file, split by \`---\` |
-| \`_load_embedding_model()\` | None | SentenceTransformer | Load \`all-MiniLM-L6-v2\` |
-| \`_initialize_faiss_index()\` | None | None | Create/load FAISS index |
-| \`retrieve(query, k=3)\` | str, int | str | Embed query, search FAISS, return context |
+| `__init__(config)` | Config object | Retriever object | Load docs & build FAISS index |
+| `_load_documents()` | None | None | Load docs from file, split by `---` |
+| `_load_embedding_model()` | None | SentenceTransformer | Load `all-MiniLM-L6-v2` |
+| `_initialize_faiss_index()` | None | None | Create/load FAISS index |
+| `retrieve(query, k=3)` | str, int | str | Embed query, search FAISS, return context |
 
 ---
 
@@ -360,16 +360,16 @@ User enters 'quit'
 
 | Method | Input | Output | Purpose |
 |--------|-------|--------|---------|
-| \`__init__(config)\` | Config object | Generator object | Load T5 tokenizer & model |
-| \`_load_tokenizer()\` | None | T5Tokenizer | Load \`t5-small\` tokenizer |
-| \`_load_model()\` | None | T5ForConditionalGeneration | Load \`t5-small\` model |
-| \`generate(query, context)\` | str, str | str | Create prompt → tokenize → generate → decode |
+| `__init__(config)` | Config object | Generator object | Load T5 tokenizer & model |
+| `_load_tokenizer()` | None | T5Tokenizer | Load `t5-small` tokenizer |
+| `_load_model()` | None | T5ForConditionalGeneration | Load `t5-small` model |
+| `generate(query, context)` | str, str | str | Create prompt → tokenize → generate → decode |
 
 ---
 
 ## DATA FLOW DIAGRAM
 
-\```
+```
 User Input
 │
 ├─→ Retriever.retrieve(query)
@@ -384,7 +384,7 @@ User Input
 │   └─→ Decode tokens back to text
 │
 └─→ Print Answer to User Terminal
-\```
+```
 
 ---
 
@@ -394,37 +394,37 @@ User Input
 
 | File | Format | Purpose |
 |------|--------|---------|
-| \`data/docs.txt\` | Text (split by \`---\n\`) | Source documents for RAG system |
+| `data/docs.txt` | Text (split by `---\n`) | Source documents for RAG system |
 
 ### Output Files
 
 | File | Format | Purpose |
 |------|--------|---------|
-| \`data/faiss.index\` | Binary FAISS format | Pre-computed embedding index |
+| `data/faiss.index` | Binary FAISS format | Pre-computed embedding index |
 
 ### Models
 
 | Model | Type | Size | Purpose |
 |-------|------|------|---------|
-| \`all-MiniLM-L6-v2\` | SentenceTransformer | ~50MB | Embed documents & user queries |
-| \`t5-small\` | Seq2Seq (Tokenizer + Model) | ~250MB | Generate answers from context |
+| `all-MiniLM-L6-v2` | SentenceTransformer | ~50MB | Embed documents & user queries |
+| `t5-small` | Seq2Seq (Tokenizer + Model) | ~250MB | Generate answers from context |
 
 ### External Libraries
 
-\```
+```
 sentence-transformers    → Load sentence embeddings & create vectors
 transformers            → Load T5 tokenizer & seq2seq model
 faiss-cpu               → Vector search & similarity matching
 torch                   → Tensor operations & GPU support
 numpy                   → Array operations for embeddings
 logging                 → Debug & info output logs
-\```
+```
 
 ---
 
 ## EXECUTION FLOW SUMMARY
 
-\```
+```
 START: main.py
 │
 ├─→ Config.__init__()
@@ -458,13 +458,13 @@ START: main.py
 │   └─→ Loop if not 'quit', else break
 │
 └─→ [SHUTDOWN]
-\```
+```
 
 ---
 
 ## EXAMPLE RUN TRACE
 
-\```
+```
 User: "What is machine learning?"
 │
 ├─→ retriever.retrieve()
@@ -495,7 +495,7 @@ User: "What is machine learning?"
 │
 └─→ Output:
     "Machine learning is a technique where systems learn from data..."
-\```
+```
 
 ---
 
