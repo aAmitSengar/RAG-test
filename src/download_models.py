@@ -1,15 +1,63 @@
 import os
+import socket
 from pathlib import Path
 from dotenv import load_dotenv
 from huggingface_hub import snapshot_download
 import certifi
 
-# Fix SSL on macOS by setting environment variable, crucial for `huggingface_hub`
-os.environ["SSL_CERT_FILE"] = certifi.where()
+
+def setup_system_truststore() -> bool:
+    """
+    Try to route SSL verification through OS trust store.
+    Useful on managed macOS environments with enterprise root CAs.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        print("Using system trust store via 'truststore'.")
+        return True
+    except Exception:
+        return False
+
+
+def setup_ssl_certificates() -> str:
+    """
+    Configure cert bundle env vars used by requests/urllib/curl-backed clients.
+    Returns the cert path used.
+    """
+    cert_path = certifi.where()
+    os.environ["SSL_CERT_FILE"] = cert_path
+    os.environ["REQUESTS_CA_BUNDLE"] = cert_path
+    os.environ["CURL_CA_BUNDLE"] = cert_path
+    return cert_path
+
+
+CERT_PATH = setup_ssl_certificates()
+USING_SYSTEM_TRUSTSTORE = setup_system_truststore()
 
 # Load token from .env
 load_dotenv()
 token = os.getenv("HF_TOKEN") or None  # None means unauthenticated (public models only)
+
+
+def check_connectivity() -> None:
+    """Print lightweight diagnostics for DNS/proxy/cert-related failures."""
+    print("Connectivity diagnostics:")
+    print("  SSL_CERT_FILE:", os.getenv("SSL_CERT_FILE"))
+    print("  REQUESTS_CA_BUNDLE:", os.getenv("REQUESTS_CA_BUNDLE"))
+    print("  HTTPS_PROXY:", os.getenv("HTTPS_PROXY") or "(not set)")
+    print("  HTTP_PROXY:", os.getenv("HTTP_PROXY") or "(not set)")
+    print("  NO_PROXY:", os.getenv("NO_PROXY") or "(not set)")
+    try:
+        ip = socket.gethostbyname("huggingface.co")
+        print("  DNS lookup huggingface.co:", ip)
+    except Exception as exc:
+        print("  DNS lookup huggingface.co failed:", exc)
+        print(
+            "  Hint: This is a network/DNS issue. Configure DNS or proxy first; "
+            "SSL fixes alone will not resolve it."
+        )
 
 def download_local_model(repo_id, local_dir):
     print(f"Downloading {repo_id} to {local_dir}...")
@@ -23,6 +71,14 @@ def download_local_model(repo_id, local_dir):
         print(f"Successfully downloaded {repo_id}")
     except Exception as e:
         print(f"Error downloading {repo_id}: {e}")
+        if "CERTIFICATE_VERIFY_FAILED" in str(e):
+            print(
+                "\nSSL certificate validation failed.\n"
+                f"Using cert bundle: {CERT_PATH}\n"
+                "If this persists on macOS, run your Python 'Install Certificates.command' once.\n"
+                "If you are on a managed network, install truststore and retry:\n"
+                "  python3 -m pip install --user truststore\n"
+            )
         if "401" in str(e) or "403" in str(e) or "token" in str(e).lower():
             print(
                 "\nAuthentication error. If this model is private or gated, "
@@ -31,6 +87,9 @@ def download_local_model(repo_id, local_dir):
             )
 
 if __name__ == "__main__":
+    print(f"Using SSL cert bundle: {CERT_PATH}")
+    print("System trust store active:", USING_SYSTEM_TRUSTSTORE)
+    check_connectivity()
     base_path = Path(__file__).parent.parent
     models_dir = base_path / "models"
     models_dir.mkdir(exist_ok=True)

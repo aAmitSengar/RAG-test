@@ -107,12 +107,25 @@ You can configure the RAG pipeline using environment variables:
 -   `GEN_MODEL`: Path to a local generation model or a Hugging Face model identifier.
     (e.g., `GEN_MODEL=/path/to/my/t5-small` or `GEN_MODEL=google/flan-t5-small`)
 -   `RETRIEVAL_K`: Number of documents to retrieve (default: 3).
+-   `FETCH_K`: Number of retrieval candidates before filtering (default: 10).
+-   `MIN_RELEVANCE_SCORE`: Minimum normalized score for keeping a chunk (default: 0.35).
+-   `MAX_CONTEXT_CHARS`: Maximum total context size sent to the generator (default: 2500).
+-   `CHUNK_SIZE_CHARS`: Target chunk size while building the index (default: 700).
+-   `CHUNK_OVERLAP_CHARS`: Overlap between adjacent chunks (default: 120).
+-   `CITATIONS_ENABLED`: Set to `true` to include citation ids in output when possible.
+-   `STEP_BY_STEP_MODE`: Set to `true` to pause and explain each major stage.
 -   `USE_LOCAL_ONLY`: Set to `true` to force loading models only from local paths.
 
 Example of setting environment variables (for a single command):
 
 ```bash
 EMB_MODEL=./models/all-MiniLM-L6-v2 GEN_MODEL=./models/t5-small python src/main.py
+```
+
+Teaching mode:
+
+```bash
+STEP_BY_STEP_MODE=true python src/main.py
 ```
 
 ## Troubleshooting

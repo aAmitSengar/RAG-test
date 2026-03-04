@@ -1,7 +1,8 @@
 """Generator module for answer generation."""
 
 import logging
-from typing import List
+import re
+from typing import Dict, List, Sequence
 
 from .config import Config
 
@@ -12,38 +13,31 @@ class Generator:
     """Sequence-to-sequence based answer generator."""
 
     def __init__(self, config: Config):
-        """
-        Initialize the generator.
-        
-        Args:
-            config: Configuration object containing model paths.
-        """
+        """Initialize the generator."""
         self.config = config
         self.tokenizer = None
         self.model = None
-        logger.info("[Generator] Initializing generator component")
         self._load_model()
 
     def _load_model(self):
         """Load the generation model and tokenizer."""
         try:
-            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
             model_source = self.config.gen_model
             local_only = self.config.gen_model_is_local
 
-            logger.info("[Generator][Step 1/3] Loading tokenizer and generation model")
-            logger.info(f"[Generator] Model source: {model_source}")
+            logger.info("[Generator] loading generation model: %s", model_source)
             try:
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     model_source,
-                    local_files_only=local_only
+                    local_files_only=local_only,
                 )
                 self.model = AutoModelForSeq2SeqLM.from_pretrained(
                     model_source,
-                    local_files_only=local_only
+                    local_files_only=local_only,
                 )
-                logger.info("[Generator] ✓ Generator model loaded successfully")
+                logger.info("[Generator] generation model ready")
                 return
             except Exception as local_error:
                 if not local_only:
@@ -60,23 +54,23 @@ class Generator:
 
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     fallback_model,
-                    local_files_only=False
+                    local_files_only=False,
                 )
                 self.model = AutoModelForSeq2SeqLM.from_pretrained(
                     fallback_model,
-                    local_files_only=False
+                    local_files_only=False,
                 )
-                logger.info("[Generator] ✓ Fallback generation model loaded successfully")
-        except ImportError:
+                logger.info("[Generator] fallback generation model ready")
+        except ImportError as exc:
             raise ImportError(
                 "transformers is required. Install with: "
                 "pip install transformers"
-            )
-        except Exception as e:
+            ) from exc
+        except Exception as exc:
             logger.error(
                 "Error loading generation model: %s. "
                 "Continuing in template-only mode.",
-                e,
+                exc,
             )
             self.tokenizer = None
             self.model = None
@@ -86,75 +80,154 @@ class Generator:
         """Resolve a reasonable Hugging Face model id for fallback loading."""
         return model_source.rstrip("/").split("/")[-1] or "t5-small"
 
-    def generate(self, question: str, context: List[str]) -> str:
-        """
-        Generate an answer based on question and context.
-        
-        Args:
-            question: The question to answer.
-            context: List of context documents.
-            
-        Returns:
-            Generated answer string.
-        """
+    @staticmethod
+    def _extract_citations(answer: str) -> List[int]:
+        """Extract citation ids from model output format like [3], [12]."""
+        hits = re.findall(r"\[(\d+)\]", answer or "")
+        return sorted({int(hit) for hit in hits})
+
+    @staticmethod
+    def _is_low_quality_answer(answer: str) -> bool:
+        """Detect common low-quality outputs from small seq2seq models."""
+        cleaned = (answer or "").strip().lower()
+        if not cleaned:
+            return True
+
+        bad_prefixes = (
+            "answer using only the provided context",
+            "you are a grounded qa assistant",
+            "question:",
+            "context:",
+            "answer:",
+        )
+        if any(cleaned.startswith(prefix) for prefix in bad_prefixes):
+            return True
+
+        # Extremely short outputs are usually non-answers.
+        if len(cleaned.split()) < 4:
+            return True
+
+        return False
+
+    @staticmethod
+    def _split_sentences(text: str) -> List[str]:
+        """Split text into sentence-like units."""
+        parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+        return [p.strip() for p in parts if p.strip()]
+
+    @staticmethod
+    def _question_terms(question: str) -> List[str]:
+        """Extract lightweight lexical terms from question for sentence matching."""
+        terms = re.findall(r"\b[a-zA-Z]{4,}\b|\b\d{4}\b", (question or "").lower())
+        stop = {"what", "when", "where", "which", "happened", "happend", "about"}
+        return [t for t in terms if t not in stop]
+
+    def _build_prompt(self, question: str, context: Sequence[Dict[str, int | float | str]]) -> str:
+        """Build an instruction-oriented prompt with source ids."""
+        context_lines = []
+        for chunk in context:
+            context_lines.append(
+                f"[Chunk {chunk['chunk_id']}] (score={float(chunk['score']):.3f}) {chunk['text']}"
+            )
+        context_text = "\n".join(context_lines)
+
+        return (
+            "You are a grounded QA assistant.\n"
+            "Answer using only the provided context.\n"
+            "If the context is insufficient, answer exactly: Insufficient context to answer confidently.\n"
+            "When you use evidence, cite chunk ids in square brackets, e.g. [12].\n\n"
+            f"Question: {question}\n\n"
+            "Context:\n"
+            f"{context_text}\n\n"
+            "Answer:"
+        )
+
+    def generate(self, question: str, context: List[Dict[str, int | float | str]]) -> str:
+        """Generate an answer based on question and structured context."""
         if not context:
-            return "No context provided to generate an answer."
+            return "Insufficient context to answer confidently."
 
         if self.tokenizer is None or self.model is None:
             raise RuntimeError("Generation model is unavailable")
 
         try:
-            # STEP 1: Build a single prompt from question + retrieved context.
-            # This is where retrieval output is fused into generation input.
-            context_text = "\n".join(context)
-            prompt = f"Question: {question}\n\nContext: {context_text}\n\nAnswer:"
-            
-            logger.info("[Generator][Step 1/3] Prompt prepared")
-            logger.info("[Generator][Step 2/3] Running model inference")
-            
-            # STEP 2: Tokenize prompt and run seq2seq decoding.
+            prompt = self._build_prompt(question, context)
+            logger.info("[Generator] generating answer from %d context chunk(s)", len(context))
+
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True)
             outputs = self.model.generate(
                 **inputs,
-                max_length=150,
-                num_beams=4,
-                early_stopping=True
+                max_new_tokens=180,
+                num_beams=5,
+                length_penalty=0.8,
+                no_repeat_ngram_size=3,
+                do_sample=self.config.do_sample,
+                early_stopping=True,
             )
-            
-            # STEP 3: Decode generated token ids back into text.
-            answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            logger.info("[Generator][Step 3/3] ✓ Answer generated successfully")
-            
-            return answer
-            
-        except Exception as e:
-            logger.error(f"Error during generation: {e}")
+
+            answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+            logger.info("[Generator] answer generated")
+            return answer or "Insufficient context to answer confidently."
+
+        except Exception as exc:
+            logger.error("Error during generation: %s", exc)
             raise
 
-    def generate_with_fallback(self, question: str, context: List[str]) -> str:
-        """
-        Generate answer with fallback to template if model fails.
-        
-        Args:
-            question: The question to answer.
-            context: List of context documents.
-            
-        Returns:
-            Generated or template-based answer.
-        """
+    def generate_with_fallback(
+        self, question: str, context: List[Dict[str, int | float | str]]
+    ) -> Dict[str, str | List[int]]:
+        """Generate answer with fallback to template if model fails."""
         try:
-            return self.generate(question, context)
-        except Exception as e:
-            logger.warning(f"[Generator] Generation failed, using template fallback: {e}")
-            return self._template_answer(question, context)
+            answer = self.generate(question, context)
+            if self._is_low_quality_answer(answer):
+                logger.warning(
+                    "[Generator] Low-quality model output detected, switching to extractive fallback."
+                )
+                answer = self._template_answer(question, context)
+        except Exception as exc:
+            logger.warning("[Generator] Generation failed, using template fallback: %s", exc)
+            answer = self._template_answer(question, context)
+
+        citations = self._extract_citations(answer)
+        return {"answer": answer, "citations": citations}
 
     @staticmethod
-    def _template_answer(question: str, context: List[str]) -> str:
-        """Generate a template-based answer."""
-        context_text = "\n".join(f"- {c}" for c in context)
-        return (
-            f"Question: {question}\n\n"
-            f"Based on the retrieved documents:\n"
-            f"{context_text}\n\n"
-            f"These documents contain relevant information to answer your question."
-        )
+    def _template_answer(question: str, context: List[Dict[str, int | float | str]]) -> str:
+        """Generate a grounded extractive answer when model output is weak."""
+        if not context:
+            return "Insufficient context to answer confidently."
+
+        top_chunks = context[:3]
+        chunks = [int(item["chunk_id"]) for item in top_chunks]
+        terms = Generator._question_terms(question)
+
+        candidates: List[str] = []
+        for item in top_chunks:
+            for sent in Generator._split_sentences(str(item["text"])):
+                candidates.append(sent)
+
+        def score(sentence: str) -> int:
+            s = sentence.lower()
+            hit_count = sum(1 for term in terms if term in s)
+            year_bonus = 2 if re.search(r"\b\d{4}\b", s) else 0
+            return hit_count + year_bonus
+
+        ranked = sorted(candidates, key=score, reverse=True)
+        selected: List[str] = []
+        seen = set()
+        for sent in ranked:
+            key = sent.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(sent)
+            if len(selected) >= 2:
+                break
+
+        if not selected:
+            selected = [str(top_chunks[0]["text"]).strip()]
+
+        answer = " ".join(selected).strip()
+        if answer and answer[-1] not in ".!?":
+            answer += "."
+        return f"{answer} [Sources: {', '.join(f'[{c}]' for c in chunks)}]"

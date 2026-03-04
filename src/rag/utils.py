@@ -12,13 +12,14 @@ def setup_logging(level=logging.INFO):
     Args:
         level: Logging level (default: INFO).
     """
+    handlers = [logging.StreamHandler()]
+    if (Path(__file__).parent.parent.parent / "rag.log").parent.exists():
+        handlers.append(logging.FileHandler(Path(__file__).parent.parent.parent / "rag.log"))
+
     logging.basicConfig(
         level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(Path(__file__).parent.parent.parent / "rag.log")
-        ]
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        handlers=handlers,
     )
 
 
