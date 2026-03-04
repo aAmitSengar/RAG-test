@@ -21,31 +21,70 @@ class Generator:
         self.config = config
         self.tokenizer = None
         self.model = None
+        logger.info("[Generator] Initializing generator component")
         self._load_model()
 
     def _load_model(self):
         """Load the generation model and tokenizer."""
         try:
             from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-            
-            logger.info(f"Loading generation model: {self.config.gen_model}")
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.config.gen_model,
-                local_files_only=self.config.gen_model_is_local
-            )
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
-                self.config.gen_model,
-                local_files_only=self.config.gen_model_is_local
-            )
-            logger.info("✓ Generator model loaded successfully")
+
+            model_source = self.config.gen_model
+            local_only = self.config.gen_model_is_local
+
+            logger.info("[Generator][Step 1/3] Loading tokenizer and generation model")
+            logger.info(f"[Generator] Model source: {model_source}")
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    model_source,
+                    local_files_only=local_only
+                )
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                    model_source,
+                    local_files_only=local_only
+                )
+                logger.info("[Generator] ✓ Generator model loaded successfully")
+                return
+            except Exception as local_error:
+                if not local_only:
+                    raise
+
+                fallback_model = self._fallback_model_name(model_source)
+                logger.warning(
+                    "Failed to load local generation model '%s': %s. "
+                    "Falling back to remote model '%s'.",
+                    model_source,
+                    local_error,
+                    fallback_model,
+                )
+
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    fallback_model,
+                    local_files_only=False
+                )
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                    fallback_model,
+                    local_files_only=False
+                )
+                logger.info("[Generator] ✓ Fallback generation model loaded successfully")
         except ImportError:
             raise ImportError(
                 "transformers is required. Install with: "
                 "pip install transformers"
             )
         except Exception as e:
-            logger.error(f"Error loading generation model: {e}")
-            raise
+            logger.error(
+                "Error loading generation model: %s. "
+                "Continuing in template-only mode.",
+                e,
+            )
+            self.tokenizer = None
+            self.model = None
+
+    @staticmethod
+    def _fallback_model_name(model_source: str) -> str:
+        """Resolve a reasonable Hugging Face model id for fallback loading."""
+        return model_source.rstrip("/").split("/")[-1] or "t5-small"
 
     def generate(self, question: str, context: List[str]) -> str:
         """
@@ -61,14 +100,19 @@ class Generator:
         if not context:
             return "No context provided to generate an answer."
 
+        if self.tokenizer is None or self.model is None:
+            raise RuntimeError("Generation model is unavailable")
+
         try:
-            # Prepare prompt
+            # STEP 1: Build a single prompt from question + retrieved context.
+            # This is where retrieval output is fused into generation input.
             context_text = "\n".join(context)
             prompt = f"Question: {question}\n\nContext: {context_text}\n\nAnswer:"
             
-            logger.info("Generating answer...")
+            logger.info("[Generator][Step 1/3] Prompt prepared")
+            logger.info("[Generator][Step 2/3] Running model inference")
             
-            # Tokenize and generate
+            # STEP 2: Tokenize prompt and run seq2seq decoding.
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True)
             outputs = self.model.generate(
                 **inputs,
@@ -77,9 +121,9 @@ class Generator:
                 early_stopping=True
             )
             
-            # Decode answer
+            # STEP 3: Decode generated token ids back into text.
             answer = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            logger.info("✓ Answer generated successfully")
+            logger.info("[Generator][Step 3/3] ✓ Answer generated successfully")
             
             return answer
             
@@ -101,7 +145,7 @@ class Generator:
         try:
             return self.generate(question, context)
         except Exception as e:
-            logger.warning(f"Generation failed, using template: {e}")
+            logger.warning(f"[Generator] Generation failed, using template fallback: {e}")
             return self._template_answer(question, context)
 
     @staticmethod

@@ -1,31 +1,61 @@
-"""Simple RAG workflow example - Simplified version without external model downloads."""
-import os
+"""Simple RAG workflow example with educational comments and terminal logs.
+
+This file intentionally avoids large model downloads and demonstrates the
+retrieval-augmented generation (RAG) idea in an easy-to-follow way.
+"""
 from pathlib import Path
+import logging
 import numpy as np
 
-# Ensure data files exist
+# Paths used by the simplified demo pipeline.
 DATA_DIR = Path(__file__).parent.parent / "data"
 INDEX_FILE = DATA_DIR / "faiss.index"
 DOCS_FILE = DATA_DIR / "docs.txt"
 
+
+def setup_logging() -> None:
+    """Configure terminal logging for educational step-by-step visibility."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
+logger = logging.getLogger(__name__)
+
 def simple_embedding(text):
-    """Create a simple deterministic embedding for testing."""
-    # Convert text to a simple hash-based embedding
+        """Create a deterministic pseudo-embedding for a text.
+
+        Why this exists:
+        - For education, we want to demonstrate retrieval without downloading
+            transformer models.
+        - We use a hash-derived random seed so the same text always maps to the
+            same vector.
+        """
     text_hash = hash(text.lower())
     np.random.seed(abs(text_hash) % (2**31))
     return np.random.randn(384).astype('float32')
 
 def build_index():
-    """Build a simple FAISS index without downloading models."""
+    """Build a FAISS index from lines in docs.txt.
+
+    Pipeline step explained:
+    1. Read raw documents from file
+    2. Convert each document to an embedding vector
+    3. Add vectors to FAISS index for nearest-neighbor search
+    4. Persist index to disk
+    """
     try:
         import faiss
     except ImportError:
-        print("Installing FAISS...")
-        os.system(f"{Path(__file__).parent.parent / 'venv' / 'bin' / 'pip'} install faiss-cpu")
-        import faiss
+        raise ImportError(
+            "faiss-cpu is not installed. Run: pip install faiss-cpu"
+        )
     
     if not DOCS_FILE.exists():
-        print(f"Please add a docs.txt file under {DATA_DIR}/ with one document per line.")
+        logger.error("Missing docs file: %s", DOCS_FILE)
+        logger.error("Please add one document per line in docs.txt")
         return
     
     # Read documents
@@ -33,10 +63,10 @@ def build_index():
         docs = [line.strip() for line in f if line.strip()]
     
     if not docs:
-        print("No documents found in docs.txt")
+        logger.error("No documents found in docs.txt")
         return
     
-    print(f"Building FAISS index from {len(docs)} documents...")
+    logger.info("STEP 1/4: Building FAISS index from %d documents", len(docs))
     
     # Create embeddings for each document using simple embedding
     embeddings = np.array([simple_embedding(doc) for doc in docs]).astype('float32')
@@ -48,17 +78,19 @@ def build_index():
     
     # Save index
     faiss.write_index(index, str(INDEX_FILE))
-    print(f"✓ Index saved to {INDEX_FILE}")
+    logger.info("STEP 4/4: Index saved to %s", INDEX_FILE)
 
 def retrieve(query, k=3):
-    """Retrieve top-k documents using the FAISS index."""
+    """Retrieve top-k documents using nearest-neighbor search in FAISS."""
     try:
         import faiss
     except ImportError:
-        import faiss
+        raise ImportError(
+            "faiss-cpu is not installed. Run: pip install faiss-cpu"
+        )
     
     if not INDEX_FILE.exists():
-        print("Index not found. Building...")
+        logger.info("FAISS index missing, building it now...")
         build_index()
     
     # Load index
@@ -75,11 +107,16 @@ def retrieve(query, k=3):
         docs = [line.strip() for line in f if line.strip()]
     
     results = [docs[i] for i in ids[0] if i < len(docs)]
+    logger.info("Retrieved %d relevant document(s)", len(results))
+    logger.debug("Distances: %s", distances)
     return results
 
 def generate_answer(question, context):
-    """Simple answer generation using templates."""
-    # Simple template-based generation without downloading models
+    """Generate an educational, template-based response from context.
+
+    In real systems, this stage uses a language model. Here we keep it simple
+    so students can focus on retrieval flow first.
+    """
     context_text = " ".join(context)
     
     answer = f"""Based on the retrieved documents:
@@ -99,10 +136,15 @@ def generate_answer(question, context):
     return answer
 
 def main():
-    """Main RAG workflow."""
+    """Run the full simplified RAG workflow with clear terminal logs."""
+    setup_logging()
+    logger.info("=" * 70)
+    logger.info("Starting Simplified RAG Demo (Education Mode)")
+    logger.info("=" * 70)
+
     # Ensure data files exist
     if not DOCS_FILE.exists():
-        print(f"Creating sample {DOCS_FILE}...")
+        logger.info("Docs file not found, creating sample docs at %s", DOCS_FILE)
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with open(DOCS_FILE, "w") as f:
             f.write("""RAG (Retrieval-Augmented Generation) is a technique that combines retrieval and generation.
@@ -111,27 +153,29 @@ FAISS is a library for efficient similarity search and clustering of dense vecto
 Natural language processing involves computational techniques for human language.
 Machine learning enables systems to learn from data without explicit programming.
 Deep learning uses neural networks with multiple layers for complex tasks.""")
-        print(f"✓ Sample docs created in {DOCS_FILE}")
+        logger.info("Sample docs created")
 
     if not INDEX_FILE.exists():
+        logger.info("No index found, starting indexing stage")
         build_index()
 
     query = "What is RAG architecture?"
-    print(f"\nQuery: {query}")
-    print("-" * 50)
+    logger.info("\nQuery: %s", query)
+    logger.info("%s", "-" * 50)
     
     hits = retrieve(query)
-    print("Retrieved documents:")
+    logger.info("Retrieved documents:")
     for i, h in enumerate(hits, 1):
-        print(f"  {i}. {h}")
+        logger.info("  %d. %s", i, h)
 
-    print("\n" + "-" * 50)
+    logger.info("\n%s", "-" * 50)
+    logger.info("Generating answer from retrieved context")
     ans = generate_answer(query, hits)
-    print("Generated answer:")
-    print(ans)
+    logger.info("Generated answer:\n%s", ans)
     
-    print("\n" + "=" * 50)
-    print("✓ RAG workflow completed successfully!")
+    logger.info("\n%s", "=" * 70)
+    logger.info("RAG workflow completed successfully")
+    logger.info("%s", "=" * 70)
 
 if __name__ == "__main__":
     main()

@@ -125,58 +125,172 @@ class RAGPipeline:
         logger.info(f"✓ Index built with {num_docs} documents\n")
 
 
+def _validate_setup(rag: 'RAGPipeline') -> bool:
+    """
+    Validate that all required files and models are available.
+    
+    Args:
+        rag: The RAG pipeline instance.
+        
+    Returns:
+        True if setup is valid, False otherwise.
+    """
+    # Check if docs.txt exists
+    if not rag.config.docs_file.exists():
+        logger.error("\n❌ ERROR: Documentation file not found at %s", rag.config.docs_file)
+        logger.error("\nPlease create a 'docs.txt' file in the data/ folder with one document per line.")
+        logger.error("\nExample docs.txt format:")
+        logger.error("-" * 60)
+        logger.error("RAG combines retrieval with generation for better answers.")
+        logger.error("FAISS enables efficient similarity search at scale.")
+        logger.error("Embeddings represent text as numerical vectors in space.")
+        logger.error("-" * 60)
+        return False
+    
+    # Check if docs have actual content
+    with open(rag.config.docs_file, "r", encoding="utf-8") as f:
+        docs = [line.strip() for line in f if line.strip()]
+    
+    if not docs:
+        logger.error("❌ ERROR: docs.txt is empty. Please add documents to search from.")
+        return False
+    
+    logger.info(f"✓ Found {len(docs)} documents in {rag.config.docs_file}")
+    return True
+
+
+def _build_index_if_needed(rag: 'RAGPipeline') -> bool:
+    """
+    Build FAISS index if it doesn't exist.
+    
+    Args:
+        rag: The RAG pipeline instance.
+        
+    Returns:
+        True if index is ready, False if there was an error.
+    """
+    if rag.config.index_file.exists():
+        logger.info(f"✓ FAISS index already exists at {rag.config.index_file}\n")
+        return True
+    
+    logger.info("Building FAISS index from documents...")
+    try:
+        rag.build_index()
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to build index: {e}")
+        return False
+
+
+def _run_single_query(rag: 'RAGPipeline', query: str) -> dict:
+    """
+    Run a single RAG query and return results.
+    
+    Args:
+        rag: The RAG pipeline instance.
+        query: The question to answer.
+        
+    Returns:
+        Dictionary with query, retrieved_documents, and answer.
+    """
+    return rag.run(query, k=rag.config.retrieval_k)
+
+
+def _print_result(result: dict) -> None:
+    """
+    Pretty print RAG result.
+    
+    Args:
+        result: Result dictionary from RAG pipeline.
+    """
+    logger.info("\n" + "=" * 70)
+    logger.info("FINAL RESULT")
+    logger.info("=" * 70)
+    logger.info(f"\nQuestion: {result['query']}")
+    logger.info(f"\nRetrieved {len(result['retrieved_documents'])} document(s):")
+    for i, doc in enumerate(result['retrieved_documents'], 1):
+        doc_preview = doc[:80] + "..." if len(doc) > 80 else doc
+        logger.info(f"  [{i}] {doc_preview}")
+    logger.info(f"\nGenerated Answer:\n{result['answer']}")
+    logger.info("\n" + "=" * 70 + "\n")
+
+
 def main():
     """
-    Main teaching example showing how to use RAG.
+    Main RAG teaching example.
     
-    This demonstrates:
-    1. Initializing the RAG pipeline
-    2. Building the index (if needed)
-    3. Running a complete RAG query
+    This demonstrates the complete RAG pipeline:
+    1. Initialize components (retriever and generator)
+    2. Build or load the FAISS index
+    3. Run queries and generate answers
+    4. Optionally enable interactive mode for multiple queries
     """
-    
     try:
-        # Initialize the pipeline
+        # Step 1: Initialize pipeline
         rag = RAGPipeline()
         
-        # Check if docs.txt exists and has data
-        if not rag.config.docs_file.exists():
-            logger.error(f"\n❌ ERROR: Documentation file not found at {rag.config.docs_file}")
-            logger.error("Please create a 'docs.txt' file in the data/ folder with one document per line.")
-            logger.error("\nExample docs.txt:")
-            logger.error("-" * 60)
-            logger.error("RAG is a technique that combines retrieval with generation.")
-            logger.error("FAISS is a library for efficient similarity search.")
-            logger.error("Embeddings represent text as numerical vectors.")
-            logger.error("-" * 60)
-            return
+        # Step 2: Validate setup
+        if not _validate_setup(rag):
+            logger.info("\n⚠️  Setup incomplete. Please fix the issues above and try again.")
+            sys.exit(1)
         
-        # Build index if it doesn't exist
-        if not rag.config.index_file.exists():
-            logger.info("📁 FAISS index not found. Building from documents...")
-            rag.build_index()
+        # Step 3: Build or load index
+        if not _build_index_if_needed(rag):
+            sys.exit(1)
         
-        # Run RAG on a sample question
-        # ============================
-        # You can modify this query or make it interactive
-        sample_query = "What is RAG architecture?"
+        # Step 4: Run sample queries
+        sample_queries = [
+            "What is RAG?",
+            "How does retrieval work?",
+            "What are embeddings used for?"
+        ]
         
-        result = rag.run(sample_query, k=3)
+        logger.info("\n" + "=" * 70)
+        logger.info("RUNNING SAMPLE QUERIES")
+        logger.info("=" * 70 + "\n")
         
-        # Print formatted result
-        logger.info("\n" + "=" * 60)
-        logger.info("FINAL RESULT")
-        logger.info("=" * 60)
-        logger.info(f"\nQuestion: {result['query']}")
-        logger.info(f"\nContext Documents: {len(result['retrieved_documents'])}")
-        logger.info(f"\nAnswer:\n{result['answer']}")
-        logger.info("\n" + "=" * 60)
+        for query in sample_queries:
+            try:
+                result = _run_single_query(rag, query)
+                _print_result(result)
+            except Exception as e:
+                logger.error(f"❌ Query failed: {e}")
+                continue
+        
+        # Step 5: Optional interactive mode
+        logger.info("\n" + "=" * 70)
+        logger.info("INTERACTIVE MODE (optional)")
+        logger.info("=" * 70)
+        logger.info("You can now ask questions interactively.")
+        logger.info("Type 'quit' or 'exit' to stop.\n")
+        
+        while True:
+            try:
+                user_query = input("Ask a question (or 'quit' to exit): ").strip()
+                
+                if user_query.lower() in ("quit", "exit", "q"):
+                    logger.info("\n✓ Goodbye!")
+                    break
+                
+                if not user_query:
+                    logger.warning("Please enter a question.")
+                    continue
+                
+                result = _run_single_query(rag, user_query)
+                _print_result(result)
+                
+            except KeyboardInterrupt:
+                logger.info("\n\n✓ Interrupted. Goodbye!")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error: {e}")
+                continue
         
     except FileNotFoundError as e:
         logger.error(f"❌ File not found: {e}")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"❌ Pipeline error: {e}")
+        logger.error(f"❌ Pipeline error: {e}", exc_info=True)
         sys.exit(1)
 
 

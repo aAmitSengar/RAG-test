@@ -23,6 +23,7 @@ class Retriever:
         """
         self.config = config
         self.encoder = None
+        logger.info("[Retriever] Initializing retriever component")
         self._load_encoder()
 
     def _load_encoder(self):
@@ -30,12 +31,13 @@ class Retriever:
         try:
             from sentence_transformers import SentenceTransformer
             
-            logger.info(f"Loading embedding model: {self.config.emb_model}")
+            logger.info("[Retriever][Step 1/4] Loading embedding model")
+            logger.info(f"[Retriever] Model source: {self.config.emb_model}")
             self.encoder = SentenceTransformer(
                 self.config.emb_model,
                 local_files_only=self.config.emb_model_is_local
             )
-            logger.info("✓ Encoder loaded successfully")
+            logger.info("[Retriever] ✓ Encoder loaded successfully")
         except ImportError:
             raise ImportError(
                 "sentence-transformers is required. Install with: "
@@ -69,30 +71,36 @@ class Retriever:
                 "pip install faiss-cpu"
             )
 
-        # Load documents
+        # STEP A: Load raw documents from docs.txt.
+        # Each non-empty line is treated as one retrievable unit.
+        logger.info("[Retriever][Index Build][Step A/4] Loading documents")
         with open(self.config.docs_file, "r", encoding="utf-8") as f:
             texts = [line.strip() for line in f if line.strip()]
 
         if not texts:
             raise ValueError(f"No documents found in {self.config.docs_file}")
 
-        logger.info(f"Building FAISS index from {len(texts)} documents...")
+        logger.info(
+            f"[Retriever][Index Build][Step B/4] Encoding {len(texts)} document(s) into vectors"
+        )
         
-        # Encode all documents
+        # STEP B: Convert text to dense vectors via sentence-transformer encoder.
         embeddings = self.encoder.encode(
             texts,
             show_progress_bar=True,
             convert_to_numpy=True
         )
         
-        # Create and populate index
+        # STEP C: Create FAISS index and add all embeddings.
         dim = embeddings.shape[1]
+        logger.info(f"[Retriever][Index Build][Step C/4] Creating FAISS IndexFlatL2 (dim={dim})")
         index = faiss.IndexFlatL2(dim)
         index.add(embeddings)
         
-        # Save index
+        # STEP D: Persist index to disk for later retrieval calls.
+        logger.info("[Retriever][Index Build][Step D/4] Saving index to disk")
         faiss.write_index(index, str(self.config.index_file))
-        logger.info(f"✓ Index saved to {self.config.index_file}")
+        logger.info(f"[Retriever] ✓ Index saved to {self.config.index_file}")
         
         return len(texts)
 
@@ -125,26 +133,33 @@ class Retriever:
             )
 
         try:
-            # Load index
+            # STEP 1: Load precomputed FAISS index.
+            logger.info("[Retriever][Query][Step 1/4] Loading FAISS index")
             index = faiss.read_index(str(self.config.index_file))
             
-            # Encode query
+            # STEP 2: Convert user query into an embedding vector.
+            logger.info("[Retriever][Query][Step 2/4] Encoding query")
             query_embedding = self.encoder.encode(
                 [query],
                 convert_to_numpy=True
             )
             
-            # Search
+            # STEP 3: Search nearest vectors in FAISS.
             k = min(k, index.ntotal)
+            logger.info(
+                f"[Retriever][Query][Step 3/4] Searching top-{k} result(s) in index with {index.ntotal} item(s)"
+            )
             distances, ids = index.search(query_embedding, k)
             
-            # Load documents
+            # STEP 4: Map FAISS ids back to the original document strings.
+            logger.info("[Retriever][Query][Step 4/4] Resolving ids to source documents")
             with open(self.config.docs_file, "r", encoding="utf-8") as f:
                 docs = [line.strip() for line in f if line.strip()]
             
-            # Retrieve results
+            # Keep only valid indices (guard against edge-case id mismatches).
             results = [docs[i] for i in ids[0] if i < len(docs)]
-            logger.info(f"Retrieved {len(results)} documents")
+            logger.info(f"[Retriever] Retrieved {len(results)} document(s)")
+            logger.debug(f"[Retriever] Distances: {np.array2string(distances[0], precision=4)}")
             
             return results
             
