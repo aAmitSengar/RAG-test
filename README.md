@@ -1,56 +1,125 @@
-# RAG-test
+# RAG-test: A Simple Retrieval-Augmented Generation (RAG) Example
 
-A small RAG (Retrieval-Augmented Generation) testing app using FAISS, sentence-transformers, and T5.
+This project provides a basic, runnable example of a RAG pipeline using Python.
+It demonstrates how to combine document retrieval with a language model
+to answer questions based on a given set of documents.
 
-## Quick Start
+## Features
 
-### 1. Install dependencies
+- **Modular Design**: Separates concerns into `Config`, `Retriever`, and `Generator` classes.
+- **FAISS Integration**: Uses FAISS for efficient similarity search over document embeddings.
+- **Sentence Transformers**: Leverages pre-trained models for creating document and query embeddings.
+- **Hugging Face Transformers**: Integrates with Hugging Face `transformers` library for answer generation.
+- **Local Model Support**: Automatically uses locally downloaded models if available, enabling offline usage.
+- **Clear Logging**: Provides informative logs for better understanding of the RAG workflow.
 
-```bash
-pip install -r requirements.txt
+## Project Structure
+
+```
+. # Project Root
+├── data/
+│   ├── docs.txt             # Your raw documents (one per line)
+│   └── faiss.index          # (Generated) FAISS index of document embeddings
+├── models/
+│   ├── all-MiniLM-L6-v2/    # (Optional) Local Sentence Transformer model
+│   └── t5-small/            # (Optional) Local T5 generation model
+├── src/
+│   ├── main.py              # Main entry point for the RAG pipeline
+│   ├── download_models.py   # Script to download models locally
+│   └── rag/
+│       ├── __init__.py      # Package initializer
+│       ├── config.py        # Configuration management
+│       ├── generator.py     # Handles answer generation
+│       ├── retriever.py     # Handles document retrieval and index building
+│       └── utils.py         # Utility functions (e.g., logging)
+├── requirements.txt         # Python dependencies
+└── README.md                # This file
 ```
 
-### 2. Configure environment variables
+## Setup and Installation
+
+1.  **Clone the Repository (if you haven't already):**
+
+    ```bash
+    git clone <repository_url>
+    cd RAG-test
+    ```
+
+2.  **Create a Python Virtual Environment:**
+
+    It's highly recommended to use a virtual environment to manage dependencies.
+
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    ```
+
+3.  **Install Dependencies:**
+
+    Install the required Python packages using `pip`:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+4.  **Download Models (Optional, but Recommended for Offline Use):**
+
+    The application can download models on the fly, but for faster startup
+    and offline functionality, you can pre-download them:
+
+    ```bash
+    python src/download_models.py
+    ```
+
+5.  **Prepare Your Documents:**
+
+    Create a file named `docs.txt` in the `data/` directory.
+    Each line in this file should contain a single document or text snippet.
+    The RAG pipeline will build an index from these documents.
+
+    Example `data/docs.txt`:
+    ```
+    Retrieval-Augmented Generation (RAG) is an AI framework for improving the specificity and factuality of responses from Large Language Models (LLMs).
+    FAISS is a library for efficient similarity search and clustering of dense vectors.
+    Sentence Transformers is a Python framework for state-of-art sentence, text and image embeddings.
+    T5 (Text-to-Text Transfer Transformer) is a Transformer-based model that frames all NLP problems as a text-to-text problem.
+    Embeddings are numerical representations of text that capture semantic meaning.
+    ```
+
+## How to Run
+
+Once you have set up the environment and prepared your `docs.txt` file, you can run the RAG pipeline:
 
 ```bash
-cp .env.example .env
-```
-
-Open `.env` and fill in your settings.  
-Most models used here are **public** and work without a token, so you can leave `HF_TOKEN` empty for normal use.
-
-> **Getting a "token expired or invalid: 403" error?**  
-> This means your `HF_TOKEN` in `.env` is expired or set to a bad value.  
-> Public models (all-MiniLM-L6-v2, t5-small) do **not** need a token — set  
-> `HF_TOKEN=` (leave it empty) and the app will connect anonymously.  
-> For private/gated models, generate a fresh token at  
-> <https://huggingface.co/settings/tokens> and paste it in.
-
-### 3. Download models (optional – for offline use)
-
-```bash
-python src/download_models.py
-```
-
-This saves `all-MiniLM-L6-v2` and `t5-small` under `models/` so the app works completely offline.
-
-### 4. Run
-
-```bash
-# Full RAG pipeline (requires model downloads or internet access)
 python src/main.py
+```
 
-# Robust version with automatic fallback
-python src/main_robust.py
+Upon first run, if `data/faiss.index` does not exist, the script will automatically
+build the FAISS index from `data/docs.txt`. It will then perform a sample query
+and print the retrieved documents and the generated answer.
 
-# Simplified offline mode (no model downloads needed)
-python src/main_simplified.py
+## Configuration
+
+You can configure the RAG pipeline using environment variables:
+
+-   `EMB_MODEL`: Path to a local embedding model or a Hugging Face model identifier.
+    (e.g., `EMB_MODEL=/path/to/my/all-MiniLM-L6-v2` or `EMB_MODEL=sentence-transformers/all-MiniLM-L6-v2`)
+-   `GEN_MODEL`: Path to a local generation model or a Hugging Face model identifier.
+    (e.g., `GEN_MODEL=/path/to/my/t5-small` or `GEN_MODEL=google/flan-t5-small`)
+-   `RETRIEVAL_K`: Number of documents to retrieve (default: 3).
+-   `USE_LOCAL_ONLY`: Set to `true` to force loading models only from local paths.
+
+Example of setting environment variables (for a single command):
+
+```bash
+EMB_MODEL=./models/all-MiniLM-L6-v2 GEN_MODEL=./models/t5-small python src/main.py
 ```
 
 ## Troubleshooting
 
-| Error | Fix |
-|-------|-----|
-| `token expired or invalid: 403` | Set `HF_TOKEN=` (empty) in `.env` for public models, or refresh the token at <https://huggingface.co/settings/tokens> for private/gated models (see step 2) |
-| SSL errors on macOS | `pip install certifi` – already handled automatically |
-| Model not found locally | Run `python src/download_models.py` |
+-   **SSL Certificate Errors (especially on macOS)**: The `config.py` module attempts to fix this by setting the `SSL_CERT_FILE` environment variable using `certifi`. Ensure `certifi` is installed (`pip install certifi`). If issues persist, refer to Python's SSL documentation.
+-   **Model Download Errors**: If models fail to download, ensure you have an active internet connection or pre-download them using `python src/download_models.py`.
+-   **`docs.txt` missing**: The `main.py` script will prompt you to create `data/docs.txt` if it's not found.
+-   **`faiss.index` missing**: The index will be built automatically on the first run if it doesn't exist.
+
+Feel free to explore and modify the code to experiment with different models, datasets, and RAG strategies!

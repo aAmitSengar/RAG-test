@@ -1,0 +1,5 @@
+{
+    "github.gitAuthentication": true,
+    "github.copilot.chat.debug.overrideChatEngine": "",
+    "workbench.settings.alwaysShowAdvancedSettings": true
+}
