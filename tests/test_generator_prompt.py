@@ -45,3 +45,48 @@ def test_low_quality_model_output_switches_to_fallback():
     assert "1947" in output["answer"]
     assert "Sources:" in output["answer"]
     assert "[2]" in output["answer"]
+
+
+def test_yes_no_question_uses_interactive_fallback_style():
+    generator = _make_generator()
+    generator.generate = lambda question, context: "question:"
+    context = [
+        {
+            "chunk_id": 21,
+            "score": 0.9,
+            "text": (
+                "Trade between India and the Roman Empire intensified in the first two centuries CE, "
+                "with exports of spices and textiles and inflows of Roman gold coins."
+            ),
+        }
+    ]
+
+    output = generator.generate_with_fallback("Was India rich?", context)
+
+    assert output["answer"].startswith("Yes, based on the retrieved context.")
+    assert "[21]" in output["answer"]
+
+
+def test_when_question_is_refined_to_direct_date_answer():
+    generator = _make_generator()
+    generator.generate = lambda question, context: (
+        "Mohandas Karamchand Gandhi biography... India became independent on 15 August 1947 "
+        "after the Indian Independence Act. [Sources: [74], [63]]"
+    )
+    context = [
+        {
+            "chunk_id": 74,
+            "score": 0.9,
+            "text": "On 15 August 1947 India became independent.",
+        },
+        {
+            "chunk_id": 63,
+            "score": 0.8,
+            "text": "The Indian Independence Act was passed in 1947.",
+        },
+    ]
+
+    output = generator.generate_with_fallback("when india got freedom?", context)
+
+    assert output["answer"].startswith("India got freedom on 15 August 1947.")
+    assert "[74]" in output["answer"]

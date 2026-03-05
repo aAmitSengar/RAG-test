@@ -58,6 +58,15 @@ class Config:
         self.do_sample = os.getenv("DO_SAMPLE", "false").lower() == "true"
         self.step_by_step_mode = os.getenv("STEP_BY_STEP_MODE", "false").lower() == "true"
         self.use_local_only = os.getenv("USE_LOCAL_ONLY", "false").lower() == "true"
+        self.hybrid_search_enabled = os.getenv("HYBRID_SEARCH_ENABLED", "true").lower() == "true"
+        self.hybrid_dense_weight = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.65"))
+        self.hybrid_sparse_weight = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.35"))
+        self.query_rewrite_enabled = os.getenv("QUERY_REWRITE_ENABLED", "true").lower() == "true"
+        self.context_compression_enabled = (
+            os.getenv("CONTEXT_COMPRESSION_ENABLED", "true").lower() == "true"
+        )
+        self.compression_max_sentences = int(os.getenv("COMPRESSION_MAX_SENTENCES", "2"))
+        self.compression_max_chars = int(os.getenv("COMPRESSION_MAX_CHARS", "420"))
 
         logger.info(
             "[Config] ready | docs=%s | index=%s | meta=%s | emb_model=%s | gen_model=%s",
@@ -130,6 +139,13 @@ class Config:
             f"  citations_enabled={self.citations_enabled},\n"
             f"  do_sample={self.do_sample},\n"
             f"  step_by_step_mode={self.step_by_step_mode},\n"
-            f"  use_local_only={self.use_local_only}\n"
+            f"  use_local_only={self.use_local_only},\n"
+            f"  hybrid_search_enabled={self.hybrid_search_enabled},\n"
+            f"  hybrid_dense_weight={self.hybrid_dense_weight},\n"
+            f"  hybrid_sparse_weight={self.hybrid_sparse_weight},\n"
+            f"  query_rewrite_enabled={self.query_rewrite_enabled},\n"
+            f"  context_compression_enabled={self.context_compression_enabled},\n"
+            f"  compression_max_sentences={self.compression_max_sentences},\n"
+            f"  compression_max_chars={self.compression_max_chars}\n"
             f")"
         )

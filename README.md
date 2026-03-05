@@ -8,6 +8,9 @@ to answer questions based on a given set of documents.
 
 - **Modular Design**: Separates concerns into `Config`, `Retriever`, and `Generator` classes.
 - **FAISS Integration**: Uses FAISS for efficient similarity search over document embeddings.
+- **Hybrid Retrieval**: Combines dense FAISS scores with sparse BM25-style lexical scores.
+- **Query Rewriting**: Expands user queries with lightweight domain synonyms before retrieval.
+- **Context Compression**: Applies query-aware extractive compression before generation.
 - **Sentence Transformers**: Leverages pre-trained models for creating document and query embeddings.
 - **Hugging Face Transformers**: Integrates with Hugging Face `transformers` library for answer generation.
 - **Local Model Support**: Automatically uses locally downloaded models if available, enabling offline usage.
@@ -115,6 +118,13 @@ You can configure the RAG pipeline using environment variables:
 -   `CITATIONS_ENABLED`: Set to `true` to include citation ids in output when possible.
 -   `STEP_BY_STEP_MODE`: Set to `true` to pause and explain each major stage.
 -   `USE_LOCAL_ONLY`: Set to `true` to force loading models only from local paths.
+-   `HYBRID_SEARCH_ENABLED`: Set to `true` to fuse dense+sparse retrieval signals (default: `true`).
+-   `HYBRID_DENSE_WEIGHT`: Weight for dense FAISS relevance in fusion (default: `0.65`).
+-   `HYBRID_SPARSE_WEIGHT`: Weight for sparse BM25-style relevance in fusion (default: `0.35`).
+-   `QUERY_REWRITE_ENABLED`: Set to `true` to rewrite/expand query terms before retrieval (default: `true`).
+-   `CONTEXT_COMPRESSION_ENABLED`: Set to `true` to compress context chunks query-aware (default: `true`).
+-   `COMPRESSION_MAX_SENTENCES`: Sentences kept per chunk during compression (default: `2`).
+-   `COMPRESSION_MAX_CHARS`: Max chars per compressed chunk (default: `420`).
 
 Example of setting environment variables (for a single command):
 
@@ -127,6 +137,32 @@ Teaching mode:
 ```bash
 STEP_BY_STEP_MODE=true python src/main.py
 ```
+
+Hybrid retrieval tuning example:
+
+```bash
+HYBRID_DENSE_WEIGHT=0.55 HYBRID_SPARSE_WEIGHT=0.45 python src/main.py
+```
+
+## Evaluation
+
+Run dataset-based evaluation:
+
+```bash
+python src/eval_rag.py --dataset data/eval.jsonl --k 3
+```
+
+Expected JSONL fields per row:
+
+```json
+{"question":"What is RAG?","expected_answer":"Retrieval-Augmented Generation is ...","expected_chunk_ids":[2,7]}
+```
+
+Reported metrics include:
+- Exact Match
+- Token F1
+- Retrieval Recall@k (when `expected_chunk_ids` is provided)
+- Citation Precision (when `expected_chunk_ids` is provided)
 
 ## Troubleshooting
 

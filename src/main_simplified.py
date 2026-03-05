@@ -25,14 +25,14 @@ def setup_logging() -> None:
 logger = logging.getLogger(__name__)
 
 def simple_embedding(text):
-        """Create a deterministic pseudo-embedding for a text.
+    """Create a deterministic pseudo-embedding for a text.
 
-        Why this exists:
-        - For education, we want to demonstrate retrieval without downloading
-            transformer models.
-        - We use a hash-derived random seed so the same text always maps to the
-            same vector.
-        """
+    Why this exists:
+    - For education, we want to demonstrate retrieval without downloading
+        transformer models.
+    - We use a hash-derived random seed so the same text always maps to the
+        same vector.
+    """
     text_hash = hash(text.lower())
     np.random.seed(abs(text_hash) % (2**31))
     return np.random.randn(384).astype('float32')

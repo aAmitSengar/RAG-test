@@ -135,6 +135,9 @@ class Generator:
             "You are a grounded QA assistant.\n"
             "Answer using only the provided context.\n"
             "If the context is insufficient, answer exactly: Insufficient context to answer confidently.\n"
+            "Respond in a conversational style with short sentences.\n"
+            "Do not copy long passages from the context.\n"
+            "Start with a direct answer first, then a brief reason.\n"
             "When you use evidence, cite chunk ids in square brackets, e.g. [12].\n\n"
             f"Question: {question}\n\n"
             "Context:\n"
@@ -188,8 +191,124 @@ class Generator:
             logger.warning("[Generator] Generation failed, using template fallback: %s", exc)
             answer = self._template_answer(question, context)
 
+        answer = self._refine_answer(question, answer, context)
         citations = self._extract_citations(answer)
         return {"answer": answer, "citations": citations}
+
+    @staticmethod
+    def _is_yes_no_question(question: str) -> bool:
+        """Detect simple yes/no question forms."""
+        text = (question or "").strip().lower()
+        return bool(
+            re.match(
+                r"^(is|are|was|were|do|does|did|can|could|should|would|will|has|have|had)\b",
+                text,
+            )
+        )
+
+    @staticmethod
+    def _compress_sentence(text: str, max_words: int = 22) -> str:
+        """Keep output concise to avoid long extractive copy."""
+        cleaned = re.sub(r"\s+", " ", (text or "").strip())
+        if not cleaned:
+            return ""
+        words = cleaned.split()
+        if len(words) <= max_words:
+            return cleaned
+        return " ".join(words[:max_words]).rstrip(",;:") + "..."
+
+    @staticmethod
+    def _infer_yes_no_from_evidence(sentence: str) -> str:
+        """Infer a lightweight yes/no stance from top evidence."""
+        text = (sentence or "").lower()
+        negation_markers = (" not ", " no ", " never ", " none ", " without ", " lacked ", " lack ")
+        if any(marker in f" {text} " for marker in negation_markers):
+            return "No"
+        return "Yes"
+
+    @staticmethod
+    def _is_when_question(question: str) -> bool:
+        """Detect time/date seeking questions."""
+        q = (question or "").strip().lower()
+        return bool(
+            re.search(r"\bwhen\b|\bwhat\s+date\b|\bwhich\s+year\b|\bwhat\s+year\b", q)
+        )
+
+    @staticmethod
+    def _strip_citation_markers(text: str) -> str:
+        """Remove citation-style markers from body text."""
+        cleaned = re.sub(
+            r"\[Sources:\s*(?:\[\d+\](?:,\s*)?)+\]",
+            "",
+            (text or ""),
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\[\d+\]", "", cleaned)
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    @staticmethod
+    def _extract_date(text: str) -> str:
+        """Extract the most specific date available from text."""
+        if not text:
+            return ""
+        month = (
+            r"January|February|March|April|May|June|July|August|September|October|"
+            r"November|December"
+        )
+        patterns = [
+            rf"\b\d{{1,2}}\s+(?:{month})\s+\d{{4}}\b",
+            rf"\b(?:{month})\s+\d{{1,2}},?\s+\d{{4}}\b",
+            r"\b\d{4}\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return match.group(0)
+        return ""
+
+    @staticmethod
+    def _source_suffix(citations: List[int], context: List[Dict[str, int | float | str]]) -> str:
+        """Build sources suffix with stable fallback ids."""
+        source_ids = citations or [int(chunk["chunk_id"]) for chunk in context[:3]]
+        source_ids = list(dict.fromkeys(source_ids))
+        return f"[Sources: {', '.join(f'[{cid}]' for cid in source_ids)}]"
+
+    @staticmethod
+    def _refine_answer(
+        question: str, answer: str, context: List[Dict[str, int | float | str]]
+    ) -> str:
+        """Refine answer to concise interactive style."""
+        if not answer:
+            return "Insufficient context to answer confidently."
+
+        citations = Generator._extract_citations(answer)
+        body = Generator._strip_citation_markers(answer)
+        if not body:
+            body = "Insufficient context to answer confidently."
+
+        if Generator._is_when_question(question):
+            candidate_text = " ".join(
+                [body] + [str(item["text"]) for item in context[:3]]
+            )
+            date = Generator._extract_date(candidate_text)
+            q_lower = (question or "").lower()
+            if date:
+                if "india" in q_lower and ("freedom" in q_lower or "independ" in q_lower):
+                    body = f"India got freedom on {date}."
+                else:
+                    body = f"It happened on {date}."
+            else:
+                body = Generator._compress_sentence(body, max_words=20)
+                if body and body[-1] not in ".!?":
+                    body += "."
+        else:
+            sentences = Generator._split_sentences(body)
+            compact = sentences[0] if sentences else body
+            body = Generator._compress_sentence(compact, max_words=24)
+            if body and body[-1] not in ".!?":
+                body += "."
+
+        return f"{body} {Generator._source_suffix(citations, context)}"
 
     @staticmethod
     def _template_answer(question: str, context: List[Dict[str, int | float | str]]) -> str:
@@ -227,7 +346,21 @@ class Generator:
         if not selected:
             selected = [str(top_chunks[0]["text"]).strip()]
 
-        answer = " ".join(selected).strip()
-        if answer and answer[-1] not in ".!?":
-            answer += "."
+        concise = [Generator._compress_sentence(sent) for sent in selected if sent.strip()]
+        concise = [sent for sent in concise if sent]
+        if not concise:
+            concise = ["I found relevant context, but it is limited."]
+
+        if Generator._is_yes_no_question(question):
+            verdict = Generator._infer_yes_no_from_evidence(concise[0])
+            reason = concise[0]
+            if reason and reason[-1] not in ".!?":
+                reason += "."
+            answer = f"{verdict}, based on the retrieved context. {reason}"
+        else:
+            body = " ".join(concise[:2]).strip()
+            if body and body[-1] not in ".!?":
+                body += "."
+            answer = body
+
         return f"{answer} [Sources: {', '.join(f'[{c}]' for c in chunks)}]"

@@ -2,7 +2,9 @@
 
 import json
 import logging
+import math
 import re
+from collections import Counter
 from typing import Dict, List
 
 import numpy as np
@@ -40,6 +42,60 @@ class Retriever:
         except Exception as exc:
             logger.error("Error loading embedding model: %s", exc)
             raise
+
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        """Tokenize text for lexical retrieval."""
+        return re.findall(r"\b[a-zA-Z0-9]{2,}\b", (text or "").lower())
+
+    @staticmethod
+    def _normalize_array(values: np.ndarray) -> np.ndarray:
+        """Normalize numeric array to 0..1 range."""
+        if values.size == 0:
+            return values
+        min_v = float(values.min())
+        max_v = float(values.max())
+        if math.isclose(min_v, max_v):
+            return np.zeros_like(values, dtype=float)
+        return (values - min_v) / (max_v - min_v)
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """Normalize user query with light cleanup."""
+        text = re.sub(r"\s+", " ", (text or "").strip())
+        text = re.sub(r"[?]{2,}", "?", text)
+        return text
+
+    def _rewrite_query(self, query: str) -> str:
+        """Apply lightweight rule-based query rewriting/expansion."""
+        if not getattr(self.config, "query_rewrite_enabled", True):
+            return query
+
+        cleaned = self._normalize_text(query)
+        tokens = self._tokenize(cleaned)
+        if not tokens:
+            return cleaned
+
+        expansions = {
+            "rich": ["wealthy", "prosperous", "economy", "trade"],
+            "poverty": ["poor", "low income", "deprivation"],
+            "war": ["conflict", "battle", "military"],
+            "independence": ["freedom", "sovereignty"],
+            "founded": ["established", "started", "origin"],
+            "ai": ["artificial intelligence", "machine learning"],
+            "rag": ["retrieval augmented generation", "retriever", "generator"],
+        }
+
+        extras: List[str] = []
+        for token in tokens:
+            extras.extend(expansions.get(token, []))
+
+        if not extras:
+            return cleaned
+
+        # Keep expansion bounded to avoid drifting query intent.
+        extra_text = " ".join(dict.fromkeys(extras))[:120]
+        return f"{cleaned} {extra_text}".strip()
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
@@ -158,6 +214,72 @@ class Retriever:
             return np.ones_like(relevance)
         return (relevance - relevance.min()) / (relevance.max() - relevance.min())
 
+    def _bm25_scores(self, query: str, chunks: List[Dict[str, int | str]]) -> np.ndarray:
+        """Compute BM25-style sparse lexical scores for each chunk."""
+        query_terms = self._tokenize(query)
+        if not query_terms or not chunks:
+            return np.zeros(len(chunks), dtype=float)
+
+        tokenized_docs = [self._tokenize(str(chunk["text"])) for chunk in chunks]
+        doc_lens = np.array([len(tokens) for tokens in tokenized_docs], dtype=float)
+        avg_doc_len = float(doc_lens.mean()) if doc_lens.size else 1.0
+        avg_doc_len = max(avg_doc_len, 1.0)
+
+        n_docs = len(tokenized_docs)
+        doc_freq = Counter()
+        for tokens in tokenized_docs:
+            doc_freq.update(set(tokens))
+
+        k1 = 1.5
+        b = 0.75
+        scores = np.zeros(n_docs, dtype=float)
+
+        for i, tokens in enumerate(tokenized_docs):
+            if not tokens:
+                continue
+            tf = Counter(tokens)
+            dl = len(tokens)
+            for term in query_terms:
+                freq = tf.get(term, 0)
+                if freq == 0:
+                    continue
+                df = doc_freq.get(term, 0)
+                idf = math.log(1.0 + ((n_docs - df + 0.5) / (df + 0.5)))
+                denom = freq + k1 * (1 - b + b * (dl / avg_doc_len))
+                scores[i] += idf * ((freq * (k1 + 1)) / max(denom, 1e-9))
+
+        return scores
+
+    def _compress_text_for_query(self, text: str, query: str) -> str:
+        """Query-aware extractive compression for context budgeting."""
+        if not text.strip():
+            return text
+        if not getattr(self.config, "context_compression_enabled", True):
+            return text
+
+        max_chars = int(getattr(self.config, "compression_max_chars", 420))
+        max_sentences = int(getattr(self.config, "compression_max_sentences", 2))
+        if len(text) <= max_chars:
+            return text
+
+        query_terms = set(self._tokenize(query))
+        sentences = self._split_sentences(text)
+        if not sentences:
+            return text[:max_chars]
+
+        def score(sentence: str) -> int:
+            stokens = set(self._tokenize(sentence))
+            term_hits = len(query_terms.intersection(stokens))
+            number_bonus = 1 if re.search(r"\b\d{3,4}\b", sentence) else 0
+            return term_hits + number_bonus
+
+        ranked = sorted(sentences, key=score, reverse=True)
+        selected = ranked[: max(1, max_sentences)]
+        compressed = " ".join(selected).strip()
+        if len(compressed) > max_chars:
+            compressed = compressed[:max_chars].rstrip() + "..."
+        return compressed
+
     def _load_metadata(self) -> List[Dict[str, int | str]]:
         """Load chunk metadata from sidecar file."""
         if not self.config.meta_file.exists():
@@ -250,14 +372,17 @@ class Retriever:
         logger.info("[Retriever] retrieving chunks for query")
         index = faiss.read_index(str(self.config.index_file))
         chunks = self._load_metadata()
+        rewritten_query = self._rewrite_query(query)
+        if rewritten_query != query:
+            logger.debug("[Retriever] rewritten query: '%s' -> '%s'", query, rewritten_query)
 
         query_embedding = self.encoder.encode(
-            [query],
+            [rewritten_query],
             show_progress_bar=False,
             convert_to_numpy=True,
         )
 
-        fetch_k = min(max(self.config.fetch_k, 3 * k), index.ntotal)
+        fetch_k = min(max(int(getattr(self.config, "fetch_k", 10)), 3 * k), index.ntotal)
         logger.info(
             "[Retriever] searching top-%d candidates (index size=%d)",
             fetch_k,
@@ -267,48 +392,84 @@ class Retriever:
 
         candidate_distances = distances[0]
         candidate_ids = ids[0]
-        relevance_scores = self._normalize_scores(candidate_distances)
+        dense_scores = self._normalize_scores(candidate_distances)
 
-        ranked_results: List[Dict[str, int | float | str]] = []
-        seen_texts = set()
-        total_chars = 0
+        hybrid_enabled = bool(getattr(self.config, "hybrid_search_enabled", True))
+        if hybrid_enabled:
+            sparse_scores_all = self._bm25_scores(rewritten_query, chunks)
+            sparse_scores_norm_all = self._normalize_array(sparse_scores_all)
+            sparse_scores = np.array(
+                [
+                    sparse_scores_norm_all[candidate_id]
+                    if 0 <= candidate_id < len(sparse_scores_norm_all)
+                    else 0.0
+                    for candidate_id in candidate_ids
+                ],
+                dtype=float,
+            )
+            dense_weight = float(getattr(self.config, "hybrid_dense_weight", 0.65))
+            sparse_weight = float(getattr(self.config, "hybrid_sparse_weight", 0.35))
+            weight_sum = max(dense_weight + sparse_weight, 1e-9)
+            relevance_scores = (
+                dense_weight * dense_scores + sparse_weight * sparse_scores
+            ) / weight_sum
+        else:
+            sparse_scores = np.zeros_like(dense_scores)
+            relevance_scores = dense_scores
 
-        for raw_id, distance, score in zip(candidate_ids, candidate_distances, relevance_scores):
+        min_score = float(getattr(self.config, "min_relevance_score", 0.35))
+        max_context_chars = int(getattr(self.config, "max_context_chars", 2500))
+        candidate_pool: List[Dict[str, int | float | str]] = []
+
+        for raw_id, distance, score, dense_score, sparse_score in zip(
+            candidate_ids, candidate_distances, relevance_scores, dense_scores, sparse_scores
+        ):
             if raw_id < 0 or raw_id >= len(chunks):
                 continue
-            if score < self.config.min_relevance_score:
+            if score < min_score:
                 continue
 
             chunk = chunks[raw_id]
             text = str(chunk["text"]).strip()
-            dedupe_key = text.lower()
-            if not text or dedupe_key in seen_texts:
+            if not text:
                 continue
-
-            if total_chars + len(text) > self.config.max_context_chars:
-                continue
-
-            seen_texts.add(dedupe_key)
-            total_chars += len(text)
-            ranked_results.append(
+            candidate_pool.append(
                 {
                     "chunk_id": int(chunk["chunk_id"]),
                     "source_doc_id": int(chunk["source_doc_id"]),
                     "text": text,
                     "score": float(score),
+                    "dense_score": float(dense_score),
+                    "sparse_score": float(sparse_score),
                     "distance": float(distance),
                 }
             )
 
+        candidate_pool.sort(key=lambda item: float(item["score"]), reverse=True)
+
+        ranked_results: List[Dict[str, int | float | str]] = []
+        seen_texts = set()
+        total_chars = 0
+        for item in candidate_pool:
+            text = self._compress_text_for_query(str(item["text"]), rewritten_query)
+            dedupe_key = text.lower()
+            if not text or dedupe_key in seen_texts:
+                continue
+            if total_chars + len(text) > max_context_chars:
+                continue
+
+            item["text"] = text
+            seen_texts.add(dedupe_key)
+            total_chars += len(text)
+            ranked_results.append(item)
             if len(ranked_results) >= k:
                 break
 
-        ranked_results.sort(key=lambda item: float(item["score"]), reverse=True)
         logger.info(
             "[Retriever] selected %d/%d chunk(s) after filtering (threshold=%.2f)",
             len(ranked_results),
             len(candidate_ids),
-            self.config.min_relevance_score,
+            min_score,
         )
         if candidate_distances.size > 0:
             logger.debug(
