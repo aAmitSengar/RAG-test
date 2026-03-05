@@ -15,3 +15,5 @@ tqdm
 python-dotenv
 pytest
 certifi # For SSL certificate handling, especially on macOS
+fastapi
+uvicorn

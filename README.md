@@ -136,3 +136,23 @@ STEP_BY_STEP_MODE=true python src/main.py
 -   **`faiss.index` missing**: The index will be built automatically on the first run if it doesn't exist.
 
 Feel free to explore and modify the code to experiment with different models, datasets, and RAG strategies!
+
+## Web UI (React)
+
+You can also ask questions from a browser UI.
+
+1. Start API backend:
+
+```bash
+python3 src/web_api.py
+```
+
+2. Start UI:
+
+```bash
+cd Clients/UI
+npm install
+npm run dev
+```
+
+Then open `http://127.0.0.1:5173`.
