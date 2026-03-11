@@ -2,82 +2,249 @@
 RAG (Retrieval-Augmented Generation) Teaching Example
 =====================================================
 
-This module demonstrates a complete RAG pipeline:
-1. RETRIEVER: Search relevant documents using embeddings (FAISS + SentenceTransformer)
-2. GENERATOR: Generate answers using the retrieved context (Seq2Seq model like T5)
+This module demonstrates a complete RAG pipeline with light conversational support:
 
-The pipeline is broken down into:
-- Config: Centralized configuration management
-- Retriever: FAISS-based document retrieval
-- Generator: Answer generation from context
+1) RETRIEVER
+   - Searches relevant documents using embeddings (FAISS + SentenceTransformer)
+   - (Hybrid lexical + semantic if enabled in .env)
 
-This is a teaching example designed to show the core RAG workflow in a clear,
-modular way. For production, consider using frameworks like LangChain or LlamaIndex.
+2) GENERATOR
+   - Generates answers using the retrieved context (Seq2Seq model like T5)
+   - Produces concise, grounded answers with optional citations
+
+3) CONVERSATION-AWARE FOLLOW-UPS
+   - Detects vague follow-ups like "tell me more", "continue", "aur batao"
+   - Rewrites them using the previous topic so retrieval stays on track
+
+4) CHAT HISTORY (SQLite)
+   - Stores one chat per program run (user and assistant messages)
+
+Teaching note:
+This is a simple, readable teaching example showing core RAG workflow + follow-ups.
+For production, consider LangChain/LlamaIndex, durable memory, auth, evals, and guardrails.
 """
 
+from __future__ import annotations
+
+import argparse
 import logging
 import sys
-import argparse
+import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-# Add the 'src' directory to Python path to enable direct imports of 'rag' module.
-# This setup is common in smaller projects and detailed further in README.md.
+# Add project root (so `rag` package is importable when running this file directly)
 sys.path.insert(0, str(Path(__file__).parent))
 
 from rag.config import Config
 from rag.generator import Generator
 from rag.retriever import Retriever
 from rag.utils import setup_logging
-
+from rag.chat_store import ChatStore  # <-- ensure rag/chat_store.py exists
 
 logger = logging.getLogger(__name__)
 
 
+# -----------------------------
+# Conversation helpers
+# -----------------------------
+
+class ConversationState:
+    """
+    Minimal in-memory conversation state so follow-up queries become topic-aware.
+      - last_question: previous user query
+      - last_answer_summary: 1–2 sentence semantic summary of the last answer
+    """
+    def __init__(self):
+        self.last_question: Optional[str] = None
+        self.last_answer_summary: Optional[str] = None
+
+    def reset(self):
+        self.last_question = None
+        self.last_answer_summary = None
+
+
+class FollowupHeuristics:
+    """
+    Simple rules to detect vague follow-up queries and build a topical prompt.
+    Extend with LLM rewriting later if needed.
+    """
+    FOLLOWUP_PATTERNS = {
+        "tell me more",
+        "continue",
+        "go on",
+        "more",
+        "and then what",
+        "what happened after that",
+        "phir kya hua",
+        "aur batao",
+        "aur bhi batao",
+        "aur",
+        "aur kya",
+    }
+
+    @staticmethod
+    def is_followup(query: str) -> bool:
+        q = (query or "").strip().lower()
+        if not q:
+            return False
+        if q in FollowupHeuristics.FOLLOWUP_PATTERNS:
+            return True
+        # Loose suffix checks (e.g., "… more", "… aur")
+        return q.endswith(" more") or q.endswith(" aur")
+
+    @staticmethod
+    def build_followup_query(
+        original_question: Optional[str],
+        last_answer_summary: Optional[str]
+    ) -> Optional[str]:
+        """
+        Convert a vague follow-up into a concrete, on-topic retrieval prompt.
+        Priority:
+          1) last_answer_summary (most precise)
+          2) original_question  (better than a vague 'tell me more')
+        """
+        if last_answer_summary:
+            return f"Give more historical details, evidence, and key dates about: {last_answer_summary}"
+        if original_question:
+            return f"Give more historical details, evidence, and key dates about the previous topic: {original_question}"
+        return None
+
+
+# -----------------------------
+# Teaching Pipeline
+# -----------------------------
+
 class RAGPipeline:
-    """Complete RAG pipeline combining retrieval and generation."""
+    """Complete RAG pipeline combining retrieval, generation, conversation memory, and chat storage."""
 
     def __init__(self):
-        """Initialize the RAG pipeline with configuration, retriever, and generator."""
+        """Initialize config, retriever, generator, chat store, and conversation memory."""
         logger.info("=" * 60)
         logger.info("Initializing RAG Pipeline")
         logger.info("=" * 60)
-
         try:
+            # 1) Config
             self.config = Config()
             logger.info("Configuration loaded")
             logger.debug("%s", self.config)
+
+            # 2) Core components
             self.retriever = Retriever(self.config)
             self.generator = Generator(self.config)
-            logger.info("Pipeline initialized")
+
+            # 3) Persistent chat history (SQLite) — one chat id per run
+            self.chat_store = ChatStore()  # creates data/chat_history.db if needed
+            self.current_chat_id = f"chat_{uuid.uuid4().hex[:8]}"
+            self.chat_store.create_chat(self.current_chat_id, title="Teaching Demo Chat")
+
+            # 4) Lightweight conversation memory
+            self.state = ConversationState()
+
+            logger.info("Pipeline initialized (chat_id=%s)", self.current_chat_id)
         except Exception as exc:
             logger.error("Failed to initialize pipeline: %s", exc)
             raise
 
     def _explain_step(self, title: str, detail: str) -> None:
-        """Print a short explanation and optionally pause in guided mode."""
+        """Print an explanation and optionally pause in guided mode."""
         logger.info("%s: %s", title, detail)
         if getattr(self.config, "step_by_step_mode", False):
             input("Press Enter to continue...")
 
-    def run(self, query: str, k: int = 3) -> Dict[str, Any]:
-        """Run retrieval + generation and return structured output."""
+    def _summarize_for_memory(self, answer_text: str, fallback: Optional[str] = None) -> str:
+        """
+        Produce a clean semantic summary so follow-ups stay on-topic.
+        HARD-FILTER persona/language/instruction echoes.
+        """
+        import re
+        if not answer_text:
+            return fallback or ""
+
+        sentences = re.split(r"(?<=[.!?])\s+", answer_text.strip())
+        clean = []
+        for s in sentences:
+            t = s.strip()
+            low = t.lower()
+            if not t:
+                continue
+            if low.startswith("answer in "):
+                continue
+            if low.startswith("respond in "):
+                continue
+            if "do not repeat this instruction" in low:
+                continue
+            if low.startswith("answer:"):
+                continue
+            if low.startswith("you are a ") or low.startswith("you are an "):
+                continue
+            clean.append(t)
+
+        if not clean:
+            return fallback or ""
+
+        first = clean[0]
+        if len(first) > 160:
+            first = first[:157].rstrip() + "..."
+        return first
+
+
+    def _make_effective_query(self, user_query: str) -> str:
+        """
+        Build the retrieval query to use:
+        - If user_query is a vague follow-up, rewrite it using conversation state.
+        - Otherwise, return user_query directly.
+        """
+        if FollowupHeuristics.is_followup(user_query):
+            logger.info("[Pipeline] Follow-up detected for query: %s", user_query)
+            rewritten = FollowupHeuristics.build_followup_query(
+                self.state.last_question,
+                self.state.last_answer_summary
+            )
+            if rewritten:
+                return rewritten
+        return user_query
+
+    def run(self, query: str, k: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Run retrieval + generation and return structured output.
+
+        Returns:
+            {
+                "query": <original_user_query>,
+                "effective_query": <rewritten_query_used_for_retrieval>,
+                "retrieved_chunks": <list[dict]>,
+                "answer": <string>,
+                "citations": <list[int]>,
+                "chat_id": <str>
+            }
+        """
         logger.info("=" * 60)
         logger.info("Running RAG Pipeline")
         logger.info("=" * 60)
-        logger.info("Query: %s", query)
+        logger.info("User Query: %s", query)
 
         try:
+            # Build an effective (topic-anchored) retrieval query for vague follow-ups
+            effective_query = self._make_effective_query(query)
+            if effective_query != query:
+                logger.info("Effective Retrieval Query: %s", effective_query)
+
+            # --- Save user message (original text) ---
+            self.chat_store.add_message(self.current_chat_id, role="user", content=query)
+
+            # Step 1: Retrieval
             self._explain_step(
                 "Step 1/2 Retrieval",
-                "Encode the question and fetch the highest-relevance chunks.",
+                "Encode the question and fetch the highest-relevance chunks."
             )
-            retrieved_chunks = self.retriever.retrieve(query, k=k)
+            top_k = int(k if k is not None else self.config.retrieval_k)
+            retrieved_chunks = self.retriever.retrieve(effective_query, k=top_k)
 
             logger.info("Retrieved %d chunk(s)", len(retrieved_chunks))
             for i, chunk in enumerate(retrieved_chunks, 1):
                 preview = str(chunk["text"])
-                preview = preview[:100] + "..." if len(preview) > 100 else preview
+                preview = (preview[:100] + "...") if len(preview) > 100 else preview
                 logger.info(
                     "  [%d] chunk=%s source=%s score=%.3f %s",
                     i,
@@ -89,29 +256,50 @@ class RAGPipeline:
 
             if not retrieved_chunks:
                 answer = "Insufficient context to answer confidently."
+
+                # --- Save assistant message (even if nothing retrieved) ---
+                self.chat_store.add_message(self.current_chat_id, role="assistant", content=answer)
+
+                # Update conversation memory for next turn
+                self.state.last_question = query
+                self.state.last_answer_summary = self._summarize_for_memory(answer, fallback=query)
+
                 return {
                     "query": query,
+                    "effective_query": effective_query,
                     "retrieved_chunks": [],
                     "answer": answer,
                     "citations": [],
+                    "chat_id": self.current_chat_id,
                 }
 
+            # Step 2: Generation
             self._explain_step(
                 "Step 2/2 Generation",
-                "Build a grounded prompt from retrieved chunks and generate an answer.",
+                "Build a grounded prompt from retrieved chunks and generate an answer."
             )
             generated = self.generator.generate_with_fallback(query, retrieved_chunks)
+            answer = str(generated.get("answer", "")).strip()
+            citations = list(generated.get("citations", []))
 
-            answer = str(generated["answer"])
-            citations = list(generated["citations"])
+            # If citations are enabled but absent, fall back to first few chunk ids
             if self.config.citations_enabled and not citations:
                 citations = [int(chunk["chunk_id"]) for chunk in retrieved_chunks[:2]]
 
+            # --- Save assistant message ---
+            self.chat_store.add_message(self.current_chat_id, role="assistant", content=answer)
+
+            # Update conversation memory for the NEXT turn
+            self.state.last_question = query
+            self.state.last_answer_summary = self._summarize_for_memory(answer, fallback=query)
+
             return {
                 "query": query,
+                "effective_query": effective_query,
                 "retrieved_chunks": retrieved_chunks,
                 "answer": answer,
                 "citations": citations,
+                "chat_id": self.current_chat_id,
             }
 
         except Exception as exc:
@@ -122,14 +310,18 @@ class RAGPipeline:
         """Build FAISS index from documents. Call this first if index doesn't exist."""
         self._explain_step(
             "Index Build",
-            "Split documents into chunks, embed them, and save FAISS index + metadata.",
+            "Split documents into chunks, embed them, and save FAISS index + metadata."
         )
         num_chunks = self.retriever.build_index()
         logger.info("Index built with %d chunk(s)", num_chunks)
 
 
+# -----------------------------
+# Utility functions
+# -----------------------------
+
 def _validate_setup(rag: "RAGPipeline") -> bool:
-    """Validate that all required files and docs are available."""
+    """Validate that docs exist and are non-empty."""
     if not rag.config.docs_file.exists():
         logger.error("\n❌ ERROR: Documentation file not found at %s", rag.config.docs_file)
         logger.error("\nPlease create a 'docs.txt' file in the data/ folder with one document per line.")
@@ -185,11 +377,14 @@ def _print_result(result: dict, debug: bool = False) -> None:
     logger.info("\n" + "=" * 70)
     logger.info("FINAL RESULT")
     logger.info("=" * 70)
-    logger.info("\nQuestion: %s", result["query"])
+    logger.info("\nOriginal Question: %s", result["query"])
+    if result.get("effective_query") and result["effective_query"] != result["query"]:
+        logger.info("Effective Retrieval Query: %s", result["effective_query"])
+
     logger.info("\nRetrieved %d chunk(s):", len(result["retrieved_chunks"]))
     for i, chunk in enumerate(result["retrieved_chunks"], 1):
         preview = str(chunk["text"])
-        preview = preview[:80] + "..." if len(preview) > 80 else preview
+        preview = (preview[:80] + "...") if len(preview) > 80 else preview
         logger.info(
             "  [%d] chunk=%s source=%s score=%.3f %s",
             i,
@@ -206,6 +401,10 @@ def _print_result(result: dict, debug: bool = False) -> None:
     logger.info("\nGenerated Answer:\n%s", result["answer"])
     logger.info("\n" + "=" * 70 + "\n")
 
+
+# -----------------------------
+# CLI entry point
+# -----------------------------
 
 def main():
     """Main RAG teaching example with optional interactive mode."""
