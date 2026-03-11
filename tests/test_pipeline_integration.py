@@ -1,8 +1,9 @@
 """Integration-style tests for pipeline output contract."""
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from main import RAGPipeline
+from main import RAGPipeline, ConversationState
 
 
 class _FakeRetriever:
@@ -40,8 +41,12 @@ class _EmptyRetriever:
 
 def _make_pipeline(citations_enabled=True):
     pipeline = object.__new__(RAGPipeline)
-    pipeline.config = SimpleNamespace(citations_enabled=citations_enabled)
+    pipeline.config = SimpleNamespace(citations_enabled=citations_enabled, retrieval_k=3)
     pipeline.debug = False
+    pipeline.current_chat_id = "test_chat"
+    pipeline.chat_store = MagicMock()
+    pipeline.chat_store.add_message = MagicMock(return_value=1)
+    pipeline.state = ConversationState()
     return pipeline
 
 
@@ -57,6 +62,7 @@ def test_pipeline_returns_answer_chunks_and_citations():
     assert result["citations"] == [10, 12]
     valid_chunk_ids = {chunk["chunk_id"] for chunk in result["retrieved_chunks"]}
     assert set(result["citations"]).issubset(valid_chunk_ids)
+    assert "pipeline_steps" in result
 
 
 def test_pipeline_returns_insufficient_context_when_no_chunks():
@@ -69,3 +75,28 @@ def test_pipeline_returns_insufficient_context_when_no_chunks():
     assert result["retrieved_chunks"] == []
     assert result["citations"] == []
     assert "Insufficient context" in result["answer"]
+    assert "pipeline_steps" in result
+
+
+def test_guided_mode_returns_pipeline_steps():
+    pipeline = _make_pipeline(citations_enabled=True)
+    pipeline.retriever = _FakeRetriever()
+    pipeline.generator = _FakeGenerator()
+
+    result = pipeline.run("Explain RAG", k=2, guided=True)
+
+    steps = result["pipeline_steps"]
+    assert len(steps) >= 3
+    step_names = [s["step"] for s in steps]
+    assert any("Retrieval" in s for s in step_names)
+    assert any("Generation" in s for s in step_names)
+
+
+def test_non_guided_mode_returns_empty_pipeline_steps():
+    pipeline = _make_pipeline(citations_enabled=True)
+    pipeline.retriever = _FakeRetriever()
+    pipeline.generator = _FakeGenerator()
+
+    result = pipeline.run("Explain RAG", k=2, guided=False)
+
+    assert result["pipeline_steps"] == []

@@ -40,8 +40,17 @@ class ChatStore:
           created_at TEXT NOT NULL,
           FOREIGN KEY(chat_id) REFERENCES chats(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS feedback(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id TEXT,
+          question TEXT NOT NULL,
+          answer TEXT NOT NULL,
+          rating INTEGER NOT NULL CHECK(rating IN (1, -1)),
+          created_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_chat_role ON messages(chat_id, role);
+        CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback(created_at);
         """)
         con.commit()
         con.close()
@@ -80,3 +89,33 @@ class ChatStore:
         rows = cur.fetchall()
         con.close()
         return [{"id": r[0], "role": r[1], "content": r[2], "tokens": r[3], "created_at": r[4]} for r in rows]
+
+    def store_feedback(self, question: str, answer: str, rating: int, chat_id: Optional[str] = None) -> int:
+        """Store user feedback for a Q&A pair. rating: 1 = helpful, -1 = not helpful."""
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO feedback(chat_id, question, answer, rating, created_at) VALUES (?, ?, ?, ?, ?);",
+            (chat_id, question, answer, rating, utc_now())
+        )
+        fid = cur.lastrowid
+        con.commit()
+        con.close()
+        return int(fid)
+
+    def get_feedback(self, limit: Optional[int] = None) -> List[Dict]:
+        """Retrieve stored feedback entries, most recent first."""
+        con = self._connect()
+        cur = con.cursor()
+        q = "SELECT id, chat_id, question, answer, rating, created_at FROM feedback ORDER BY created_at DESC"
+        if limit:
+            q += " LIMIT ?"
+            cur.execute(q, (limit,))
+        else:
+            cur.execute(q)
+        rows = cur.fetchall()
+        con.close()
+        return [
+            {"id": r[0], "chat_id": r[1], "question": r[2], "answer": r[3], "rating": r[4], "created_at": r[5]}
+            for r in rows
+        ]

@@ -206,9 +206,14 @@ class RAGPipeline:
                 return rewritten
         return user_query
 
-    def run(self, query: str, k: Optional[int] = None) -> Dict[str, Any]:
+    def run(self, query: str, k: Optional[int] = None, guided: bool = False) -> Dict[str, Any]:
         """
         Run retrieval + generation and return structured output.
+
+        Args:
+            query: The user question.
+            k: Number of chunks to retrieve (defaults to config value).
+            guided: When True, include step-by-step pipeline explanations in the response.
 
         Returns:
             {
@@ -217,13 +222,16 @@ class RAGPipeline:
                 "retrieved_chunks": <list[dict]>,
                 "answer": <string>,
                 "citations": <list[int]>,
-                "chat_id": <str>
+                "chat_id": <str>,
+                "pipeline_steps": <list[dict]>  # populated only when guided=True
             }
         """
         logger.info("=" * 60)
         logger.info("Running RAG Pipeline")
         logger.info("=" * 60)
         logger.info("User Query: %s", query)
+
+        pipeline_steps: list = []
 
         try:
             # Build an effective (topic-anchored) retrieval query for vague follow-ups
@@ -239,6 +247,11 @@ class RAGPipeline:
                 "Step 1/2 Retrieval",
                 "Encode the question and fetch the highest-relevance chunks."
             )
+            if guided:
+                pipeline_steps.append({
+                    "step": "Step 1/2: Retrieval",
+                    "description": "Encoding the question and fetching the highest-relevance chunks from the FAISS index.",
+                })
             top_k = int(k if k is not None else self.config.retrieval_k)
             retrieved_chunks = self.retriever.retrieve(effective_query, k=top_k)
 
@@ -254,6 +267,13 @@ class RAGPipeline:
                     float(chunk["score"]),
                     preview,
                 )
+
+            if guided:
+                pipeline_steps.append({
+                    "step": "Retrieval Result",
+                    "description": f"Retrieved {len(retrieved_chunks)} relevant chunk(s).",
+                    "chunks": retrieved_chunks,
+                })
 
             if not retrieved_chunks:
                 answer = "Insufficient context to answer confidently."
@@ -272,6 +292,7 @@ class RAGPipeline:
                     "answer": answer,
                     "citations": [],
                     "chat_id": self.current_chat_id,
+                    "pipeline_steps": pipeline_steps,
                 }
 
             # Step 2: Generation
@@ -279,6 +300,11 @@ class RAGPipeline:
                 "Step 2/2 Generation",
                 "Build a grounded prompt from retrieved chunks and generate an answer."
             )
+            if guided:
+                pipeline_steps.append({
+                    "step": "Step 2/2: Generation",
+                    "description": "Building a grounded prompt from retrieved chunks and generating an answer.",
+                })
             generated = self.generator.generate_with_fallback(query, retrieved_chunks)
             answer = str(generated.get("answer", "")).strip()
             citations = list(generated.get("citations", []))
@@ -301,6 +327,7 @@ class RAGPipeline:
                 "answer": answer,
                 "citations": citations,
                 "chat_id": self.current_chat_id,
+                "pipeline_steps": pipeline_steps,
             }
 
         except Exception as exc:

@@ -77,7 +77,7 @@ class Config:
         self.max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", "200"))
         self.answer_language = os.getenv("ANSWER_LANGUAGE", "Hinglish")
         self.persona = os.getenv("PERSONA", "You are a knowledgeable history teacher.")
-        self.step_by_step_mode = os.getenv("STEP_BY_STEP_MODE", "false").lower() == "false"
+        self.step_by_step_mode = os.getenv("STEP_BY_STEP_MODE", "false").lower() == "true"
 
         # --- Local-only & scoring strategies ---
         self.use_local_only = os.getenv("USE_LOCAL_ONLY", "false").lower() == "true"
