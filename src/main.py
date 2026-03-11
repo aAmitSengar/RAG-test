@@ -118,11 +118,12 @@ class FollowupHeuristics:
 class RAGPipeline:
     """Complete RAG pipeline combining retrieval, generation, conversation memory, and chat storage."""
 
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         """Initialize config, retriever, generator, chat store, and conversation memory."""
         logger.info("=" * 60)
         logger.info("Initializing RAG Pipeline")
         logger.info("=" * 60)
+        self.debug = debug
         try:
             # 1) Config
             self.config = Config()
@@ -147,9 +148,9 @@ class RAGPipeline:
             raise
 
     def _explain_step(self, title: str, detail: str) -> None:
-        """Print an explanation and optionally pause in guided mode."""
+        """Print an explanation and optionally pause when running in debug mode."""
         logger.info("%s: %s", title, detail)
-        if getattr(self.config, "step_by_step_mode", False):
+        if self.debug:
             input("Press Enter to continue...")
 
     def _summarize_for_memory(self, answer_text: str, fallback: Optional[str] = None) -> str:
@@ -419,7 +420,7 @@ def main():
     setup_logging(level=logging.DEBUG if args.debug else logging.ERROR)
 
     try:
-        rag = RAGPipeline()
+        rag = RAGPipeline(debug=args.debug)
 
         if not _validate_setup(rag):
             logger.info("\n⚠️  Setup incomplete. Please fix the issues above and try again.")

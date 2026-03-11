@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import os
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
@@ -44,9 +43,6 @@ pipeline: RAGPipeline | None = None
 @app.on_event("startup")
 def startup_event() -> None:
     global pipeline
-
-    # Avoid interactive pauses in API mode.
-    os.environ.setdefault("STEP_BY_STEP_MODE", "false")
 
     pipeline = RAGPipeline()
     if not _validate_setup(pipeline):
