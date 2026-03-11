@@ -128,3 +128,82 @@ button[disabled] {
   margin-bottom: 6px;
   font-weight: 600;
 }
+
+/* ── Feedback panel ── */
+.feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.feedback-label {
+  font-size: 0.9rem;
+  color: #4c6480;
+  font-weight: 600;
+}
+
+.feedback-btn {
+  width: auto;
+  padding: 7px 14px;
+  font-size: 0.9rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: #f1f6ff;
+  color: #123a74;
+  border-color: #c5d8f7;
+}
+
+.feedback-btn.wrong.active,
+.feedback-btn.wrong:focus {
+  background: #fff0f0;
+  color: #8a1f1f;
+  border-color: #f0b8b8;
+}
+
+.correction-form {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+  background: #fff8f0;
+  border: 1px solid #f0d8b8;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.correction-form label {
+  color: #6b3a00;
+}
+
+.correction-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.cancel-btn {
+  background: #f1f6ff;
+  color: #123a74;
+  border: 1px solid #c5d8f7;
+}
+
+.feedback-status {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: #4c6480;
+}
+
+.feedback-status.success {
+  color: #145a14;
+  background: #f0fff0;
+  border: 1px solid #b8e8b8;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.feedback-status.error-msg {
+  color: #8a1f1f;
+}
+

@@ -23,6 +23,20 @@ def setup_logging(level=logging.INFO):
     )
 
 
+def is_auth_error(exc: Exception) -> bool:
+    """Return True if the exception looks like a HuggingFace authentication/token error.
+
+    This covers the common patterns produced by ``huggingface_hub`` and the
+    ``requests`` library when an expired, invalid, or missing token causes a
+    401/403 HTTP response.
+    """
+    msg = str(exc).lower()
+    return any(
+        indicator in msg
+        for indicator in ("token", "401", "403", "unauthorized", "forbidden", "authentication")
+    )
+
+
 def load_documents(docs_file: Path) -> List[str]:
     """
     Load documents from a file.

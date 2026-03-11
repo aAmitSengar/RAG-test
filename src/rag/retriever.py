@@ -3,13 +3,16 @@
 import json
 import logging
 import math
+import os
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
 
 from .config import Config
+from .utils import is_auth_error
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +32,37 @@ class Retriever:
             from sentence_transformers import SentenceTransformer
 
             logger.info("[Retriever] loading embedding model: %s", self.config.emb_model)
-            self.encoder = SentenceTransformer(
-                self.config.emb_model,
-                local_files_only=self.config.emb_model_is_local,
-            )
+            try:
+                self.encoder = SentenceTransformer(
+                    self.config.emb_model,
+                    local_files_only=self.config.emb_model_is_local,
+                )
+            except Exception as primary_error:
+                # If the error is token-related (expired/invalid HF_TOKEN) and the
+                # model is public, retry without authentication.
+                if is_auth_error(primary_error) and not self.config.emb_model_is_local:
+                    logger.warning(
+                        "[Retriever] Authentication error loading embedding model "
+                        "('%s'). Retrying without token. "
+                        "If the model is private, set a valid HF_TOKEN in your .env file. "
+                        "Get a token at: https://huggingface.co/settings/tokens",
+                        primary_error,
+                    )
+                    import huggingface_hub
+
+                    with huggingface_hub.utils.disable_progress_bars():
+                        # Temporarily disable token so HF Hub falls back to anonymous.
+                        old_token = os.environ.pop("HF_TOKEN", None)
+                        try:
+                            self.encoder = SentenceTransformer(
+                                self.config.emb_model,
+                                local_files_only=False,
+                            )
+                        finally:
+                            if old_token is not None:
+                                os.environ["HF_TOKEN"] = old_token
+                else:
+                    raise
             logger.info("[Retriever] embedding model ready")
         except ImportError as exc:
             raise ImportError(
@@ -318,6 +348,21 @@ class Retriever:
 
         if not docs:
             raise ValueError(f"No documents found in {self.config.docs_file}")
+
+        # Also index any corrections that users have provided via the feedback
+        # loop.  Each correction is a Q→A pair that was authoritative enough for
+        # the user to record — so it should be retrievable for future queries.
+        corrections_file = getattr(self.config, "corrections_file", None)
+        if corrections_file and Path(corrections_file).exists():
+            with open(corrections_file, "r", encoding="utf-8") as fh:
+                corrections = [line.strip() for line in fh if line.strip()]
+            if corrections:
+                logger.info(
+                    "[Retriever] including %d correction(s) from %s",
+                    len(corrections),
+                    corrections_file,
+                )
+                docs.extend(corrections)
 
         chunks = self._build_chunks_from_docs(docs)
         if not chunks:

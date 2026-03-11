@@ -1,10 +1,12 @@
 """Generator module for answer generation."""
 
 import logging
+import os
 import re
 from typing import Dict, List, Sequence
 
 from .config import Config
+from .utils import is_auth_error
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,36 @@ class Generator:
                 )
                 logger.info("[Generator] generation model ready")
                 return
-            except Exception as local_error:
+            except Exception as primary_error:
+                # If the error is token-related (expired/invalid HF_TOKEN) and we
+                # are not in local-only mode, retry without authentication so public
+                # models can still be downloaded anonymously.
+                if is_auth_error(primary_error) and not local_only:
+                    logger.warning(
+                        "[Generator] Authentication error loading generation model "
+                        "('%s'). Retrying without token. "
+                        "If the model is private, set a valid HF_TOKEN in your .env file. "
+                        "Get a token at: https://huggingface.co/settings/tokens",
+                        primary_error,
+                    )
+                    old_token = os.environ.pop("HF_TOKEN", None)
+                    try:
+                        self.tokenizer = AutoTokenizer.from_pretrained(
+                            model_source,
+                            local_files_only=False,
+                        )
+                        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                            model_source,
+                            local_files_only=False,
+                        )
+                        logger.info("[Generator] generation model ready (anonymous access)")
+                        return
+                    except Exception:
+                        pass
+                    finally:
+                        if old_token is not None:
+                            os.environ["HF_TOKEN"] = old_token
+
                 if not local_only:
                     raise
 
@@ -48,7 +79,7 @@ class Generator:
                     "Failed to load local generation model '%s': %s. "
                     "Falling back to remote model '%s'.",
                     model_source,
-                    local_error,
+                    primary_error,
                     fallback_model,
                 )
 

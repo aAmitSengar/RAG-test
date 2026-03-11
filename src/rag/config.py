@@ -5,6 +5,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
+# Load .env file early so HF_TOKEN and other overrides are available to all
+# entry points (main.py, web_api.py) before any model loading happens.
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +34,9 @@ class Config:
         self.docs_file = self.data_dir / "docs.txt"
         self.index_file = self.data_dir / "faiss.index"
         self.meta_file = self.data_dir / "faiss_meta.json"
+        # Corrections written by the feedback loop (Q→A pairs learned from
+        # user corrections).  Indexed alongside docs.txt automatically.
+        self.corrections_file = self.data_dir / "corrections.txt"
 
         # 4) Resolve embedding and generation model source.
         # Priority: env var > local folder > Hugging Face default id.
@@ -47,7 +55,11 @@ class Config:
         # 5) Configure SSL cert paths (especially helpful on macOS).
         self._setup_ssl_certificates()
 
-        # 6) Runtime knobs for retrieval and generation behavior.
+        # 6) Configure Hugging Face authentication token.
+        self.hf_token: Optional[str] = os.getenv("HF_TOKEN")
+        self._configure_hf_token()
+
+        # 7) Runtime knobs for retrieval and generation behavior.
         self.retrieval_k = int(os.getenv("RETRIEVAL_K", "3"))
         self.chunk_size_chars = int(os.getenv("CHUNK_SIZE_CHARS", "700"))
         self.chunk_overlap_chars = int(os.getenv("CHUNK_OVERLAP_CHARS", "120"))
@@ -109,6 +121,25 @@ class Config:
         except ImportError:
             # certifi not installed, SSL will use system defaults
             logger.debug("[Config] certifi not installed; using system SSL defaults")
+
+    def _configure_hf_token(self) -> None:
+        """Configure Hugging Face Hub authentication from HF_TOKEN env var.
+
+        If HF_TOKEN is set, it propagates the value so the HuggingFace libraries
+        pick it up automatically.  If it is absent, any stale token that was
+        previously cached by the HuggingFace Hub CLI is cleared from the
+        environment so that public-model downloads are attempted anonymously
+        (avoiding spurious 403 errors from an expired cached token).
+        """
+        if self.hf_token:
+            os.environ["HF_TOKEN"] = self.hf_token
+            logger.debug("[Config] HuggingFace token configured from HF_TOKEN env var")
+        else:
+            # Remove any cached token from the environment to prevent HuggingFace Hub
+            # from using an expired cached token which would result in a 403 error.
+            os.environ.pop("HF_TOKEN", None)
+            os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
+            logger.debug("[Config] No HF_TOKEN set; anonymous HuggingFace access will be used")
 
     @property
     def emb_model_is_local(self) -> bool:
