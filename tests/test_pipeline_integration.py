@@ -41,6 +41,7 @@ class _EmptyRetriever:
 def _make_pipeline(citations_enabled=True):
     pipeline = object.__new__(RAGPipeline)
     pipeline.config = SimpleNamespace(citations_enabled=citations_enabled)
+    pipeline.debug = False
     return pipeline
 
 
