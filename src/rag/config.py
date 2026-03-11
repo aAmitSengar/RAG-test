@@ -13,51 +13,54 @@ class Config:
     """Centralized configuration management for the RAG system."""
 
     def __init__(self):
-        """Initialize configuration from environment and project structure."""
+        """Initialize configuration from environment and project structure.
+
+        Teaching points:
+        - We allow users to control behavior without touching code (12-factor style).
+        - Paths are resolved first so later components can rely on them.
+        - Many RAG-quality knobs (chunk sizes, hybrid weights) are env-driven.
+        """
         logger.info("[Config] Initializing configuration")
 
-        # 1) Resolve important project directories.
+        # --- Project structure ---
         self.project_root = Path(__file__).parent.parent.parent
-        self.data_dir = self.project_root / "data"
-        self.models_dir = self.project_root / "models"
 
-        # 2) Ensure required folders exist before any file/model operations.
+        # Prefer DATA_DIR from .env; else default to ./data under project root
+        env_data_dir = os.getenv("DATA_DIR")
+        self.data_dir = Path(env_data_dir).resolve() if env_data_dir else (self.project_root / "data")
+        self.models_dir = self.project_root / "models"
         self.data_dir.mkdir(exist_ok=True)
         self.models_dir.mkdir(exist_ok=True)
 
-        # 3) Define data file locations used by retriever and pipeline.
+        # --- Data artifacts ---
         self.docs_file = self.data_dir / "docs.txt"
         self.index_file = self.data_dir / "faiss.index"
         self.meta_file = self.data_dir / "faiss_meta.json"
+        # Saved dense vectors for MMR/diversity selection
+        self.vecs_file = self.data_dir / "faiss_vecs.npy"
 
-        # 4) Resolve embedding and generation model source.
-        # Priority: env var > local folder > Hugging Face default id.
+        # --- Model sources (env > local folder > default HF id) ---
         self.emb_model = self._resolve_model_path(
             os.getenv("EMB_MODEL"),
             self.models_dir / "all-MiniLM-L6-v2",
             "all-MiniLM-L6-v2",
         )
-
         self.gen_model = self._resolve_model_path(
             os.getenv("GEN_MODEL"),
             self.models_dir / "t5-small",
             "t5-small",
         )
 
-        # 5) Configure SSL cert paths (especially helpful on macOS).
+        # --- SSL (for environments that need explicit certs) ---
         self._setup_ssl_certificates()
 
-        # 6) Runtime knobs for retrieval and generation behavior.
-        self.retrieval_k = int(os.getenv("RETRIEVAL_K", "3"))
+        # --- Retrieval knobs ---
+        self.retrieval_k = int(os.getenv("RETRIEVAL_K", "5"))
         self.chunk_size_chars = int(os.getenv("CHUNK_SIZE_CHARS", "700"))
         self.chunk_overlap_chars = int(os.getenv("CHUNK_OVERLAP_CHARS", "120"))
         self.fetch_k = int(os.getenv("FETCH_K", "10"))
         self.min_relevance_score = float(os.getenv("MIN_RELEVANCE_SCORE", "0.35"))
         self.max_context_chars = int(os.getenv("MAX_CONTEXT_CHARS", "2500"))
-        self.citations_enabled = os.getenv("CITATIONS_ENABLED", "true").lower() == "true"
-        self.do_sample = os.getenv("DO_SAMPLE", "false").lower() == "true"
-        self.step_by_step_mode = os.getenv("STEP_BY_STEP_MODE", "false").lower() == "true"
-        self.use_local_only = os.getenv("USE_LOCAL_ONLY", "false").lower() == "true"
         self.hybrid_search_enabled = os.getenv("HYBRID_SEARCH_ENABLED", "true").lower() == "true"
         self.hybrid_dense_weight = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.65"))
         self.hybrid_sparse_weight = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.35"))
@@ -68,13 +71,27 @@ class Config:
         self.compression_max_sentences = int(os.getenv("COMPRESSION_MAX_SENTENCES", "2"))
         self.compression_max_chars = int(os.getenv("COMPRESSION_MAX_CHARS", "420"))
 
+        # --- Generation knobs ---
+        self.citations_enabled = os.getenv("CITATIONS_ENABLED", "true").lower() == "true"
+        self.do_sample = os.getenv("DO_SAMPLE", "false").lower() == "true"
+        self.max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", "200"))
+        self.answer_language = os.getenv("ANSWER_LANGUAGE", "Hinglish")
+        self.persona = os.getenv("PERSONA", "You are a knowledgeable history teacher.")
+        self.step_by_step_mode = os.getenv("STEP_BY_STEP_MODE", "false").lower() == "false"
+
+        # --- Local-only & scoring strategies ---
+        self.use_local_only = os.getenv("USE_LOCAL_ONLY", "false").lower() == "true"
+        self.use_index_ip_cosine = os.getenv("USE_INDEX_IP_COSINE", "true").lower() == "true"
+        self.mmr_lambda = float(os.getenv("MMR_LAMBDA", "0.7"))
+        self.rerank_enabled = os.getenv("RERANK_ENABLED", "false").lower() == "true"
+
+        # --- Logging level (applies to root logger) ---
+        level = os.getenv("LOG_LEVEL", "INFO").upper()
+        logging.getLogger().setLevel(level)
+
         logger.info(
             "[Config] ready | docs=%s | index=%s | meta=%s | emb_model=%s | gen_model=%s",
-            self.docs_file,
-            self.index_file,
-            self.meta_file,
-            self.emb_model,
-            self.gen_model,
+            self.docs_file, self.index_file, self.meta_file, self.emb_model, self.gen_model
         )
 
     @staticmethod

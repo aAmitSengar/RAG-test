@@ -90,3 +90,36 @@ def test_when_question_is_refined_to_direct_date_answer():
 
     assert output["answer"].startswith("India got freedom on 15 August 1947.")
     assert "[74]" in output["answer"]
+
+
+def test_timeline_question_returns_year_wise_chronological_points():
+    generator = _make_generator()
+    generator.generate = lambda question, context: (
+        "In order to provide deeper historical density, we revisit epochs in detail."
+    )
+    context = [
+        {
+            "chunk_id": 96,
+            "score": 0.93,
+            "text": (
+                "In 1857, a large rebellion challenged East India Company rule. "
+                "In 1885, the Indian National Congress was formed. "
+                "In 1947, India gained independence."
+            ),
+        },
+        {
+            "chunk_id": 88,
+            "score": 0.81,
+            "text": "In 1950, the Constitution came into effect and India became a republic.",
+        },
+    ]
+
+    output = generator.generate_with_fallback(
+        "In Indian history explain year wise change, please explain", context
+    )
+
+    assert output["answer"].startswith("Year-wise timeline:")
+    assert "1857:" in output["answer"]
+    assert "1947:" in output["answer"]
+    assert "1950:" in output["answer"]
+    assert output["answer"].find("1857:") < output["answer"].find("1947:")
