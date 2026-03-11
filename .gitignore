@@ -208,3 +208,7 @@ __marimo__/
 models/*
 models/all-MiniLM-L6-v2
 models/t5-small
+
+# Node.js / frontend
+Clients/UI/node_modules/
+Clients/UI/dist/
