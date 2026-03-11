@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from main import RAGPipeline, _build_index_if_needed, _validate_setup
-from rag.utils import setup_logging
+from rag.utils import is_auth_error, setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,18 @@ def startup_event() -> None:
     # Avoid interactive pauses in API mode.
     os.environ.setdefault("STEP_BY_STEP_MODE", "false")
 
-    pipeline = RAGPipeline()
+    try:
+        pipeline = RAGPipeline()
+    except Exception as exc:
+        if is_auth_error(exc):
+            logger.error(
+                "Pipeline initialization failed due to an authentication error: %s. "
+                "Set a valid HF_TOKEN in your .env file. "
+                "Generate a new token at: https://huggingface.co/settings/tokens",
+                exc,
+            )
+        raise
+
     if not _validate_setup(pipeline):
         raise RuntimeError("Invalid setup: docs.txt missing or empty")
     if not _build_index_if_needed(pipeline):
@@ -75,7 +86,15 @@ def ask_question(payload: AskRequest) -> AskResponse:
         return AskResponse(**result)
     except Exception as exc:
         logger.exception("Ask request failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        detail = str(exc)
+        # Provide an actionable hint for Hugging Face token errors.
+        if is_auth_error(exc):
+            detail = (
+                f"{detail} — If you are seeing a token/authentication error, "
+                "set a valid HF_TOKEN in your .env file. "
+                "Generate a new token at: https://huggingface.co/settings/tokens"
+            )
+        raise HTTPException(status_code=500, detail=detail) from exc
 
 
 def main() -> None:

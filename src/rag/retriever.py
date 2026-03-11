@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import os
 import re
 from collections import Counter
 from typing import Dict, List
@@ -10,6 +11,7 @@ from typing import Dict, List
 import numpy as np
 
 from .config import Config
+from .utils import is_auth_error
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +31,37 @@ class Retriever:
             from sentence_transformers import SentenceTransformer
 
             logger.info("[Retriever] loading embedding model: %s", self.config.emb_model)
-            self.encoder = SentenceTransformer(
-                self.config.emb_model,
-                local_files_only=self.config.emb_model_is_local,
-            )
+            try:
+                self.encoder = SentenceTransformer(
+                    self.config.emb_model,
+                    local_files_only=self.config.emb_model_is_local,
+                )
+            except Exception as primary_error:
+                # If the error is token-related (expired/invalid HF_TOKEN) and the
+                # model is public, retry without authentication.
+                if is_auth_error(primary_error) and not self.config.emb_model_is_local:
+                    logger.warning(
+                        "[Retriever] Authentication error loading embedding model "
+                        "('%s'). Retrying without token. "
+                        "If the model is private, set a valid HF_TOKEN in your .env file. "
+                        "Get a token at: https://huggingface.co/settings/tokens",
+                        primary_error,
+                    )
+                    import huggingface_hub
+
+                    with huggingface_hub.utils.disable_progress_bars():
+                        # Temporarily disable token so HF Hub falls back to anonymous.
+                        old_token = os.environ.pop("HF_TOKEN", None)
+                        try:
+                            self.encoder = SentenceTransformer(
+                                self.config.emb_model,
+                                local_files_only=False,
+                            )
+                        finally:
+                            if old_token is not None:
+                                os.environ["HF_TOKEN"] = old_token
+                else:
+                    raise
             logger.info("[Retriever] embedding model ready")
         except ImportError as exc:
             raise ImportError(

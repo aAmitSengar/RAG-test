@@ -167,6 +167,11 @@ Reported metrics include:
 ## Troubleshooting
 
 -   **SSL Certificate Errors (especially on macOS)**: The `config.py` module attempts to fix this by setting the `SSL_CERT_FILE` environment variable using `certifi`. Ensure `certifi` is installed (`pip install certifi`). If issues persist, refer to Python's SSL documentation.
+-   **`token expired or invalid: 403` / Authentication Errors**: This happens when an expired or invalid Hugging Face token is used (or cached). To fix:
+    1. Generate a fresh token at <https://huggingface.co/settings/tokens>.
+    2. Copy `.env.example` to `.env` in the project root and set `HF_TOKEN=<your_new_token>`.
+    3. Restart the server — it loads `.env` automatically on startup.
+    > **Note**: Public models (`all-MiniLM-L6-v2`, `t5-small`) work without any token. The app will automatically retry without a token if the provided one is rejected, so simply leaving `HF_TOKEN` blank (or absent) is enough for public models.
 -   **Model Download Errors**: If models fail to download, ensure you have an active internet connection or pre-download them using `python src/download_models.py`.
 -   **`docs.txt` missing**: The `main.py` script will prompt you to create `data/docs.txt` if it's not found.
 -   **`faiss.index` missing**: The index will be built automatically on the first run if it doesn't exist.
