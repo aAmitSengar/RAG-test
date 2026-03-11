@@ -9,6 +9,11 @@ export default function App() {
   const [result, setResult] = useState(null)
   const [showChunks, setShowChunks] = useState(false)
 
+  // Feedback state
+  const [feedbackState, setFeedbackState] = useState('idle') // idle | wrong | submitting | done
+  const [correction, setCorrection] = useState('')
+  const [feedbackMessage, setFeedbackMessage] = useState('')
+
   const canAsk = useMemo(() => question.trim().length > 0 && !loading, [question, loading])
 
   async function askQuestion(e) {
@@ -17,6 +22,10 @@ export default function App() {
 
     setLoading(true)
     setError('')
+    // Reset feedback whenever a new question is asked.
+    setFeedbackState('idle')
+    setCorrection('')
+    setFeedbackMessage('')
 
     try {
       const response = await fetch(`${API_BASE}/api/ask`, {
@@ -40,11 +49,40 @@ export default function App() {
     }
   }
 
+  async function submitCorrection(e) {
+    e.preventDefault()
+    if (!correction.trim() || !result) return
+
+    setFeedbackState('submitting')
+    try {
+      const response = await fetch(`${API_BASE}/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: result.query,
+          wrong_answer: result.answer,
+          correct_answer: correction.trim()
+        })
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload.detail || `Feedback failed with status ${response.status}`)
+      }
+
+      setFeedbackMessage(payload.message || 'Correction saved!')
+      setFeedbackState('done')
+    } catch (err) {
+      setFeedbackMessage(err.message || 'Failed to save correction.')
+      setFeedbackState('idle')
+    }
+  }
+
   return (
     <div className="page">
       <div className="container">
         <h1>RAG Question UI</h1>
-        <p className="subtitle">Ask from browser instead of terminal.</p>
+        <p className="subtitle">Ask questions — and teach the system when it gets something wrong.</p>
 
         <form onSubmit={askQuestion} className="ask-form">
           <label htmlFor="question">Question</label>
@@ -74,6 +112,72 @@ export default function App() {
               </p>
             )}
 
+            {/* ── Feedback panel ── */}
+            {feedbackState !== 'done' && (
+              <div className="feedback-row">
+                <span className="feedback-label">Was this answer correct?</span>
+
+                <button
+                  type="button"
+                  className="feedback-btn correct"
+                  onClick={() => { setFeedbackState('idle'); setFeedbackMessage(''); }}
+                  title="Yes, this is correct"
+                >
+                  👍 Yes
+                </button>
+
+                <button
+                  type="button"
+                  className={`feedback-btn wrong${feedbackState === 'wrong' ? ' active' : ''}`}
+                  onClick={() => setFeedbackState('wrong')}
+                  title="No, this is wrong — I'll provide the correct answer"
+                >
+                  👎 No — teach it
+                </button>
+              </div>
+            )}
+
+            {feedbackState === 'wrong' && (
+              <form onSubmit={submitCorrection} className="correction-form">
+                <label htmlFor="correction">What is the correct answer?</label>
+                <textarea
+                  id="correction"
+                  value={correction}
+                  onChange={(e) => setCorrection(e.target.value)}
+                  placeholder="Type the correct answer here..."
+                  rows={3}
+                />
+                <div className="correction-actions">
+                  <button
+                    type="submit"
+                    disabled={!correction.trim()}
+                  >
+                    Submit correction
+                  </button>
+                  <button
+                    type="button"
+                    className="cancel-btn"
+                    onClick={() => { setFeedbackState('idle'); setCorrection(''); }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {feedbackState === 'submitting' && (
+              <p className="feedback-status">Saving correction and updating knowledge base…</p>
+            )}
+
+            {feedbackState === 'done' && (
+              <p className="feedback-status success">{feedbackMessage}</p>
+            )}
+
+            {feedbackState === 'idle' && feedbackMessage && (
+              <p className="feedback-status error-msg">{feedbackMessage}</p>
+            )}
+
+            {/* ── Retrieved chunks toggle ── */}
             <button
               type="button"
               className="toggle"

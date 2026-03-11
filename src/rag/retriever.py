@@ -6,6 +6,7 @@ import math
 import os
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
@@ -347,6 +348,21 @@ class Retriever:
 
         if not docs:
             raise ValueError(f"No documents found in {self.config.docs_file}")
+
+        # Also index any corrections that users have provided via the feedback
+        # loop.  Each correction is a Q→A pair that was authoritative enough for
+        # the user to record — so it should be retrievable for future queries.
+        corrections_file = getattr(self.config, "corrections_file", None)
+        if corrections_file and Path(corrections_file).exists():
+            with open(corrections_file, "r", encoding="utf-8") as fh:
+                corrections = [line.strip() for line in fh if line.strip()]
+            if corrections:
+                logger.info(
+                    "[Retriever] including %d correction(s) from %s",
+                    len(corrections),
+                    corrections_file,
+                )
+                docs.extend(corrections)
 
         chunks = self._build_chunks_from_docs(docs)
         if not chunks:

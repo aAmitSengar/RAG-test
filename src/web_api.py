@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from main import RAGPipeline, _build_index_if_needed, _validate_setup
+from rag.feedback import FeedbackStore
 from rag.utils import is_auth_error, setup_logging
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,18 @@ class AskResponse(BaseModel):
     retrieved_chunks: List[Dict[str, Any]]
 
 
+class FeedbackRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    wrong_answer: str = Field(default="", max_length=4000)
+    correct_answer: str = Field(..., min_length=1, max_length=4000)
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    corrections_total: int
+    message: str
+
+
 app = FastAPI(title="RAG API", version="1.0.0")
 
 app.add_middleware(
@@ -39,11 +52,12 @@ app.add_middleware(
 
 
 pipeline: RAGPipeline | None = None
+feedback_store: FeedbackStore | None = None
 
 
 @app.on_event("startup")
 def startup_event() -> None:
-    global pipeline
+    global pipeline, feedback_store
 
     # Avoid interactive pauses in API mode.
     os.environ.setdefault("STEP_BY_STEP_MODE", "false")
@@ -64,6 +78,8 @@ def startup_event() -> None:
         raise RuntimeError("Invalid setup: docs.txt missing or empty")
     if not _build_index_if_needed(pipeline):
         raise RuntimeError("Failed to build/load index")
+
+    feedback_store = FeedbackStore(pipeline.config.data_dir)
 
 
 @app.get("/health")
@@ -95,6 +111,53 @@ def ask_question(payload: AskRequest) -> AskResponse:
                 "Generate a new token at: https://huggingface.co/settings/tokens"
             )
         raise HTTPException(status_code=500, detail=detail) from exc
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+def submit_feedback(payload: FeedbackRequest) -> FeedbackResponse:
+    """Accept a user correction and teach the RAG system.
+
+    The correct answer is added to the retrieval knowledge base and the FAISS
+    index is rebuilt in-place so that future queries benefit immediately.
+    This is the RAG equivalent of "learning from mistakes" — no model
+    fine-tuning required.
+    """
+    if pipeline is None or feedback_store is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized")
+
+    try:
+        feedback_store.record(
+            question=payload.question,
+            wrong_answer=payload.wrong_answer,
+            correct_answer=payload.correct_answer,
+        )
+        # Rebuild the index so the correction is immediately searchable.
+        pipeline.build_index()
+        total = feedback_store.correction_count()
+        logger.info("[Feedback] index rebuilt after correction; total corrections=%d", total)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Feedback submission failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return FeedbackResponse(
+        status="ok",
+        corrections_total=total,
+        message=(
+            "Thank you! The correction has been added to the knowledge base. "
+            "The system will use it to answer similar questions better in future."
+        ),
+    )
+
+
+@app.get("/api/feedback/list")
+def list_feedback() -> Dict[str, Any]:
+    """Return all recorded corrections (what the system has learned)."""
+    if feedback_store is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialized")
+    corrections = feedback_store.list_corrections()
+    return {"total": len(corrections), "corrections": corrections}
 
 
 def main() -> None:

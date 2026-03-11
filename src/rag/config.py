@@ -34,6 +34,9 @@ class Config:
         self.docs_file = self.data_dir / "docs.txt"
         self.index_file = self.data_dir / "faiss.index"
         self.meta_file = self.data_dir / "faiss_meta.json"
+        # Corrections written by the feedback loop (Q→A pairs learned from
+        # user corrections).  Indexed alongside docs.txt automatically.
+        self.corrections_file = self.data_dir / "corrections.txt"
 
         # 4) Resolve embedding and generation model source.
         # Priority: env var > local folder > Hugging Face default id.
