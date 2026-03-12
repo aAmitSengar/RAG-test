@@ -170,6 +170,7 @@ class Generator:
     def _build_prompt(self, question: str, context: Sequence[Dict[str, int | float | str]]) -> str:
         """
         Build instruction-only prompt WITHOUT encouraging echo.
+        Uses a richer prompt for summary/explanation questions.
         """
         persona = getattr(self.config, "persona", "You are a knowledgeable history teacher.")
         language = getattr(self.config, "answer_language", "English")
@@ -180,6 +181,22 @@ class Generator:
                 f"[Chunk {chunk['chunk_id']}] (score={float(chunk['score']):.3f}) {chunk['text']}"
             )
         context_text = "\n".join(context_lines)
+
+        if self._is_summary_question(question):
+            return (
+                f"{persona}\n"
+                f"Respond in {language}. Do NOT repeat this instruction in your answer.\n"
+                "You are a grounded QA assistant.\n"
+                "Answer using only the provided context.\n"
+                "If the context is insufficient, answer exactly: Insufficient context to answer confidently.\n"
+                "Write a detailed, multi-sentence answer covering the key points from the context.\n"
+                "Use 3 to 6 sentences to provide a thorough answer.\n"
+                "When you use evidence, cite chunk IDs like [12].\n\n"
+                f"Question: {question}\n\n"
+                "Context:\n"
+                f"{context_text}\n\n"
+                "Answer:"
+            )
 
         return (
             f"{persona}\n"
@@ -257,11 +274,15 @@ class Generator:
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
+            # Allow more tokens for summary/explanation questions
+            configured_tokens = int(getattr(self.config, "max_new_tokens", 200))
+            max_tokens = max(configured_tokens, 400) if self._is_summary_question(question) else configured_tokens
+
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=int(getattr(self.config, "max_new_tokens", 200)),
+                max_new_tokens=max_tokens,
                 num_beams=5,
-                length_penalty=0.8,
+                length_penalty=1.2 if self._is_summary_question(question) else 0.8,
                 no_repeat_ngram_size=3,
                 do_sample=self.config.do_sample,
                 early_stopping=True,
@@ -306,6 +327,19 @@ class Generator:
             re.match(
                 r"^(is|are|was|were|do|does|did|can|could|should|would|will|has|have|had)\b",
                 text,
+            )
+        )
+
+    @staticmethod
+    def _is_summary_question(question: str) -> bool:
+        """Detect questions that ask for a detailed summary, explanation, or description."""
+        q = (question or "").strip().lower()
+        return bool(
+            re.search(
+                r"\b(summarize|summarise|summary|explain|describe|tell me about|"
+                r"what (is|was|were|are)|who (is|was|were|are)|give me|overview|detail|elaborate|"
+                r"what happened|how did|why did|what (led|caused|resulted))\b",
+                q,
             )
         )
 
@@ -554,7 +588,26 @@ class Generator:
                     if body and body[-1] not in ".!?":
                         body += "."
 
-        # 3c) DEFAULT path -> tight, one-sentence answer.
+        # 3c) SUMMARY/EXPLANATION requests -> keep up to 5 sentences for a rich answer.
+        elif self._is_summary_question(question):
+            sentences = self._split_sentences(body)
+            # Take up to 5 sentences, deduplicated.
+            seen_sentences: set = set()
+            rich_sentences = []
+            for sent in sentences:
+                key = sent.lower().strip()
+                if key in seen_sentences:
+                    continue
+                seen_sentences.add(key)
+                rich_sentences.append(sent)
+                if len(rich_sentences) >= 5:
+                    break
+            if rich_sentences:
+                body = " ".join(rich_sentences).strip()
+            if body and body[-1] not in ".!?":
+                body += "."
+
+        # 3d) DEFAULT path -> tight, one-sentence answer.
         else:
             sentences = self._split_sentences(body)
             compact = sentences[0] if sentences else body
@@ -638,7 +691,9 @@ class Generator:
         if not context:
             return "Insufficient context to answer confidently."
 
-        top_chunks = context[:3]
+        # For summary questions, use more chunks and more sentences
+        is_summary = Generator._is_summary_question(question)
+        top_chunks = context[:5] if is_summary else context[:3]
         chunks = [int(item["chunk_id"]) for item in top_chunks]
         terms = Generator._question_terms(question)
 
@@ -656,19 +711,24 @@ class Generator:
         ranked = sorted(candidates, key=score, reverse=True)
         selected: List[str] = []
         seen = set()
+        max_sentences = 5 if is_summary else 2
         for sent in ranked:
             key = sent.lower()
             if key in seen:
                 continue
             seen.add(key)
             selected.append(sent)
-            if len(selected) >= 2:
+            if len(selected) >= max_sentences:
                 break
 
         if not selected:
             selected = [str(top_chunks[0]["text"]).strip()]
 
-        concise = [Generator._compress_sentence(sent) for sent in selected if sent.strip()]
+        if is_summary:
+            # For summary questions, keep sentences fuller (up to 40 words each)
+            concise = [Generator._compress_sentence(sent, max_words=40) for sent in selected if sent.strip()]
+        else:
+            concise = [Generator._compress_sentence(sent) for sent in selected if sent.strip()]
         concise = [sent for sent in concise if sent]
         if not concise:
             concise = ["I found relevant context, but it is limited."]
@@ -680,7 +740,7 @@ class Generator:
                 reason += "."
             answer = f"{verdict}, based on the retrieved context. {reason}"
         else:
-            body = " ".join(concise[:2]).strip()
+            body = " ".join(concise).strip()
             if body and body[-1] not in ".!?":
                 body += "."
             answer = body

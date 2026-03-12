@@ -92,6 +92,48 @@ def test_when_question_is_refined_to_direct_date_answer():
     assert "[74]" in output["answer"]
 
 
+def test_summary_question_returns_multiple_sentences():
+    """Summary/explain questions should produce multi-sentence rich answers."""
+    generator = _make_generator()
+    generator.generate = lambda question, context: "question:"  # force fallback
+    context = [
+        {
+            "chunk_id": 70,
+            "score": 0.95,
+            "text": (
+                "Mohandas Karamchand Gandhi emerged as the foremost leader of the Indian freedom struggle. "
+                "He championed non-violent resistance (Satyagraha) to oppose British colonial rule. "
+                "His Salt March in 1930 became a pivotal moment in the independence movement."
+            ),
+        },
+        {
+            "chunk_id": 110,
+            "score": 0.88,
+            "text": (
+                "The Indian National Congress, founded in 1885, united freedom fighters across the country. "
+                "The Quit India Movement of 1942 demanded an end to British rule."
+            ),
+        },
+        {
+            "chunk_id": 72,
+            "score": 0.82,
+            "text": (
+                "India achieved independence on 15 August 1947 after decades of struggle. "
+                "Jawaharlal Nehru became the first Prime Minister of independent India."
+            ),
+        },
+    ]
+
+    output = generator.generate_with_fallback("summarize freedom?", context)
+
+    # Should contain multiple sentences (not just one line)
+    sentences = [s for s in output["answer"].split(".") if s.strip()]
+    assert len(sentences) >= 3, f"Expected at least 3 sentences, got: {output['answer']}"
+    # Should cite sources
+    assert "Sources:" in output["answer"]
+    assert "[70]" in output["answer"]
+
+
 def test_timeline_question_returns_year_wise_chronological_points():
     generator = _make_generator()
     generator.generate = lambda question, context: (

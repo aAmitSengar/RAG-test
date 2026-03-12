@@ -25,6 +25,10 @@ class _FakeFaiss:
     def read_index(path):
         return _FakeIndex()
 
+    @staticmethod
+    def normalize_L2(x):
+        pass
+
 
 def _make_retriever(tmp_path: Path) -> Retriever:
     retriever = object.__new__(Retriever)
@@ -33,11 +37,19 @@ def _make_retriever(tmp_path: Path) -> Retriever:
         fetch_k=10,
         min_relevance_score=0.35,
         max_context_chars=80,
+        hybrid_search_enabled=False,
+        query_rewrite_enabled=False,
+        context_compression_enabled=False,
+        rerank_enabled=False,
+        use_index_ip_cosine=False,
+        mmr_lambda=1.0,
+        vecs_file=tmp_path / "faiss_vecs.npy",
     )
     retriever.config.index_file.write_text("dummy", encoding="utf-8")
     retriever.encoder = SimpleNamespace(
         encode=lambda *args, **kwargs: np.array([[1.0, 2.0]], dtype=float)
     )
+    retriever.reranker = None
     retriever._load_metadata = lambda: [
         {"chunk_id": 0, "source_doc_id": 0, "text": "alpha context"},
         {"chunk_id": 1, "source_doc_id": 0, "text": "beta context"},
@@ -96,6 +108,10 @@ def test_hybrid_search_can_boost_lexical_match(monkeypatch, tmp_path):
         def read_index(path):
             return _LocalIndex()
 
+        @staticmethod
+        def normalize_L2(x):
+            pass
+
     retriever = object.__new__(Retriever)
     retriever.config = SimpleNamespace(
         index_file=tmp_path / "faiss.index",
@@ -107,11 +123,16 @@ def test_hybrid_search_can_boost_lexical_match(monkeypatch, tmp_path):
         hybrid_sparse_weight=0.8,
         query_rewrite_enabled=False,
         context_compression_enabled=False,
+        rerank_enabled=False,
+        use_index_ip_cosine=True,
+        mmr_lambda=1.0,
+        vecs_file=tmp_path / "faiss_vecs.npy",
     )
     retriever.config.index_file.write_text("dummy", encoding="utf-8")
     retriever.encoder = SimpleNamespace(
         encode=lambda *args, **kwargs: np.array([[1.0, 2.0]], dtype=float)
     )
+    retriever.reranker = None
     retriever._load_metadata = lambda: [
         {"chunk_id": 0, "source_doc_id": 0, "text": "generic summary"},
         {"chunk_id": 1, "source_doc_id": 0, "text": "roman trade wealth in india"},
